@@ -1,0 +1,35 @@
+// src/index.js
+import express from "express";
+import cors from "cors";
+import "./config/mongo.js";           // Connect to MongoDB
+import admin from "./config/firebase.js"; // Ensure Firebase is initialized
+
+// Routes
+// import contractRoutes from "./routes/contractRoutes.js";
+
+
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+
+// Test endpoint
+app.get("/", (req, res) => {
+    res.json({ message: "YACK backend is running" });
+});
+
+// API routes
+// app.use("/contracts", contractRoutes);
+
+// Global error handler
+app.use((err, req, res, next) => {
+    console.error("Server Error:", err);
+    res.status(500).json({ error: "Internal server error", details: err.message });
+});
+
+// Start server
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+    console.log(`YACK backend running on port ${PORT}`);
+});
