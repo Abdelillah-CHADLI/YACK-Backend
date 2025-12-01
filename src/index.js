@@ -5,7 +5,7 @@ import "./config/mongo.js";           // Connect to MongoDB
 import admin from "./config/firebase.js"; // Ensure Firebase is initialized
 
 // Routes
-// import contractRoutes from "./routes/contractRoutes.js";
+import contractRoutes from "./routes/contractRoutes.js";
 
 
 const app = express();
@@ -20,7 +20,7 @@ app.get("/", (req, res) => {
 });
 
 // API routes
-// app.use("/contracts", contractRoutes);
+app.use("/contracts", contractRoutes);
 
 // Global error handler
 app.use((err, req, res, next) => {
