@@ -1,5 +1,17 @@
 import mongoose from "mongoose";
 
+const EmbeddedMessageSchema = new mongoose.Schema({
+    who:     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    content: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now }
+}, { _id: true });
+
+const EmbeddedMediaSchema = new mongoose.Schema({
+    who:     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
+    content: { type: String, required: true },
+    createdAt: { type: Date, default: Date.now }
+}, { _id: true });
+
 const ContractSchema = new mongoose.Schema({
     userA: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     userB: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
@@ -18,7 +30,10 @@ const ContractSchema = new mongoose.Schema({
     disputedUserA:  { type: Boolean, default: false },
     disputedUserB:  { type: Boolean, default: false },
 
-    hash: { type: String, default: "" }
+    hash: { type: String, default: "" },
+
+    messages: [EmbeddedMessageSchema],
+    media:    [EmbeddedMediaSchema]
 
 }, { timestamps: true });
 

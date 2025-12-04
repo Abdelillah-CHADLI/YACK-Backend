@@ -10,7 +10,8 @@ import {
     signContract,
     acceptContract,
     disputeContract,
-    verifyContract
+    verifyContract,
+    getContracts
 } from "../controllers/contractController.js";
 
 const router = express.Router();
@@ -23,6 +24,7 @@ router.post("/sign", auth, signContract); // sign a contract
 router.post("/accept", auth, checkContractPermission, acceptContract);
 router.post("/dispute", auth,checkContractPermission , disputeContract);
 router.get("/verify",auth, checkContractPermission, verifyContract); // verify contract hash
+router.get("/list", auth, getContracts); // list all contracts
 
 
 export default router;

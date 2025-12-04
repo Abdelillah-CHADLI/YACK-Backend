@@ -313,9 +313,15 @@ export const verifyContract = async (req, res) => {
 
 export const getContracts = async (req, res) => {
     try {
-        // todo: get all user contracts
+        const userId = req.userDoc._id;
+        const contracts = await Contract.find({
+            $or: [{ userA: userId }, { userB: userId }]
+        }).sort({ updatedAt: -1 });
+
+        res.json({ success: true, contracts });
 
     } catch (err) {
         console.error(err);
+        res.status(500).json({ error: "Failed to fetch contracts" });
     }
 };
