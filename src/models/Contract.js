@@ -18,6 +18,8 @@ const ContractSchema = new mongoose.Schema({
     disputedUserA:  { type: Boolean, default: false },
     disputedUserB:  { type: Boolean, default: false },
 
+    hash: { type: String, default: "" }
+
 }, { timestamps: true });
 
 export default mongoose.model("Contract", ContractSchema);

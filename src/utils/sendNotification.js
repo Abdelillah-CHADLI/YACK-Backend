@@ -1,7 +1,7 @@
 import admin from "../config/firebase.js";
 import User from "../models/User.js";
 
-export async function sendNotification(userID, title, body) {
+export async function sendNotification(userID, title, body, data = {}) {
     const user = await User.findById(userID);
 
     if (!user || !user.fcmTokens.length)
@@ -11,7 +11,8 @@ export async function sendNotification(userID, title, body) {
         token,
         notification: {
             title,
-            body
+            body,
+            data
         },
         android: { priority: "high" },  // faster
         apns: { headers: { "apns-priority": "10" } }

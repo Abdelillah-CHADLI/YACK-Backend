@@ -9,6 +9,12 @@ const TempContractSchema = new mongoose.Schema({
 
     hash: { type: String, default: "" },
 
+    expiresAt: {
+        type: Date,
+        default: () => new Date(Date.now() + 15 * 60 * 1000), // 15 minutes from creation
+        index: { expires: 0 } // TTL index
+    }
+
 }, { timestamps: true });
 
 export default mongoose.model("TempContract", TempContractSchema);

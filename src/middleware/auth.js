@@ -17,12 +17,15 @@ export default async function auth(req, res, next) {
 
         // 3. If user not found => require first/last name to create
         if (!user) {
-            const { firstName, lastName, fcmToken } = req.body;
+            let { firstName, lastName, fcmToken } = req.body;
 
             if (!firstName || !lastName)
-                return res.status(403).json({
-                    error: "User doesn't exist. Send firstName and lastName to create."
-                });
+                firstName = "unnamed"
+                lastName = "unnamed"
+
+            // return res.status(403).json({
+                //     error: "User doesn't exist. Send firstName and lastName to create."
+                // });
 
             user = await User.create({
                 firebaseID,
