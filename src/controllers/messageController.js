@@ -3,15 +3,25 @@ import Contract from "../models/Contract.js";
 
 export const sendMessage = async (req, res) => {
     try {
-        const { content } = req.body;
-        if (!content || typeof content !== "string") {
-            return res.status(400).json({ error: "Message content required" });
+        const { contentForSender, contentForRecipient, contentHash } = req.body;
+
+        // Validate encrypted content fields
+        if (!contentForSender || typeof contentForSender !== "string") {
+            return res.status(400).json({ error: "Encrypted content for sender required" });
+        }
+        if (!contentForRecipient || typeof contentForRecipient !== "string") {
+            return res.status(400).json({ error: "Encrypted content for recipient required" });
+        }
+        if (!contentHash || typeof contentHash !== "string") {
+            return res.status(400).json({ error: "Content hash required" });
         }
 
         const contract = req.contract;
         const entry = {
             who: req.userDoc._id,
-            content: content.trim()
+            contentForSender: contentForSender.trim(),
+            contentForRecipient: contentForRecipient.trim(),
+            contentHash: contentHash.trim()
         };
 
         contract.messages.push(entry);
@@ -22,7 +32,7 @@ export const sendMessage = async (req, res) => {
             await sendNotification(
                 otherUser,
                 "New Message",
-                `${req.userDoc.firstName}: ${content.substring(0, 50)}`,
+                `${req.userDoc.firstName} sent you a message`,
                 {
                     type: "contractMessage",
                     contractId: contract._id.toString()
@@ -41,12 +51,25 @@ export const getAllMessages = async (req, res) => {
     try {
         const limit = Number(req.query.limit) || 50;
         const contract = await Contract.findById(req.contract._id)
-            .select("messages")
+            .select("messages userA userB")
             .populate("messages.who", "firstName lastName");
 
+        const userId = req.userDoc._id.toString();
+
+        // Map messages to return only the caller's encrypted version
         const sorted = contract.messages
             .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-            .slice(-limit);
+            .slice(-limit)
+            .map(msg => {
+                const isSender = msg.who._id.toString() === userId;
+                return {
+                    _id: msg._id,
+                    who: msg.who,
+                    content: isSender ? msg.contentForSender : msg.contentForRecipient,
+                    contentHash: msg.contentHash,
+                    createdAt: msg.createdAt
+                };
+            });
 
         res.json({ success: true, messages: sorted });
     } catch (err) {

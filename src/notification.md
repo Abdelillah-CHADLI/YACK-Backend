@@ -26,6 +26,7 @@ To receive notifications a `User` document must contain at least one valid `fcmT
 | Key | Type | Description |
 | --- | --- | --- |
 | `type` | `"contractJoin"` | Discriminator for client routing. |
+| `tempId` | `string` | Mongo `_id` of the temporary contract. |
 | `userId` | `string` | Mongo `_id` of the joining user. |
 | `username` | `string` | First name of the joining user, suitable for UI copy. |
 
