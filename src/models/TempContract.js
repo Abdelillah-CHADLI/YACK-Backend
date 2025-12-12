@@ -7,6 +7,19 @@ const TempContractSchema = new mongoose.Schema({
     userASign: { type: Boolean, default: false },
     userBSign: { type: Boolean, default: false },
 
+    // Encrypted contract details for userA (creator sets these)
+    titleUserA:       { type: String, default: "" },
+    descriptionUserA: { type: String, default: "" },
+    priceUserA:       { type: String, default: "" },
+
+    // Encrypted contract details for userB (set when userB joins)
+    titleUserB:       { type: String, default: "" },
+    descriptionUserB: { type: String, default: "" },
+    priceUserB:       { type: String, default: "" },
+
+    // SHA hash of title + description + price combined
+    detailsHash: { type: String, default: "" },
+
     hash: { type: String, default: "" },
 
     expiresAt: {
