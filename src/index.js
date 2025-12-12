@@ -8,6 +8,7 @@ import admin from "./config/firebase.js"; // Ensure Firebase is initialized
 import contractRoutes from "./routes/contractRoutes.js";
 import messageRoutes from "./routes/messageRoutes.js";
 import mediaRoutes from "./routes/mediaRoutes.js";
+import userRoutes from "./routes/userRoutes.js";
 
 
 const app = express();
@@ -25,6 +26,7 @@ app.get("/", (req, res) => {
 app.use("/contracts", contractRoutes);
 app.use("/messages", messageRoutes);
 app.use("/media", mediaRoutes);
+app.use("/user", userRoutes);
 
 // Global error handler
 app.use((err, req, res, next) => {
