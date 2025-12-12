@@ -71,7 +71,7 @@ export const joinContract = async (req, res) => {
         const userA = await User.findById(temp.userA).select("firstName lastName");
 
         // Notify userA
-        sendNotification(
+        await sendNotification(
             temp.userA,
             "Contract Update",
             `${req.userDoc.firstName} joined your contract.`,
@@ -120,7 +120,7 @@ export const signContract = async (req, res) => {
 
         // notify other user
         const other = uid === temp.userA?.toString() ? temp.userB : temp.userA;
-        if (other) sendNotification(other,
+        if (other) await sendNotification(other,
             "Contract Update",
             "The other user signed.",
             {
@@ -189,7 +189,7 @@ export const acceptContract = async (req, res) => {
 
         const otherUser = isUserA ? contract.userB : contract.userA;
         if (otherUser) {
-            sendNotification(
+            await sendNotification(
                 otherUser,
                 "Contract Accepted",
                 `${req.userDoc.firstName} accepted the contract.`,
@@ -253,7 +253,7 @@ export const disputeContract = async (req, res) => {
 
         const otherUser = isUserA ? contract.userB : contract.userA;
         if (otherUser) {
-            sendNotification(
+            await sendNotification(
                 otherUser,
                 "Contract Disputed",
                 `${req.userDoc.firstName} disputed the contract.`,

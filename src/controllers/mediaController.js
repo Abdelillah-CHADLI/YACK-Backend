@@ -1,5 +1,6 @@
 import { MediaHandler } from "../utils/mediaHandler.js";
 import Contract from "../models/Contract.js";
+import { sendNotification } from "../utils/sendNotification.js";
 
 export const sendMedia = async (req, res) => {
     try {
@@ -18,6 +19,21 @@ export const sendMedia = async (req, res) => {
 
         contract.media.push(entry);
         await contract.save();
+
+        const otherUser = req.isUserA ? contract.userB : contract.userA;
+        if (otherUser) {
+            const preview = file.filename || stored.path.split("/").pop();
+            await sendNotification(
+                otherUser,
+                "New Media",
+                `${req.userDoc.firstName} shared ${preview}`,
+                {
+                    type: "contractMedia",
+                    contractId: contract._id.toString(),
+                    mediaPath: stored.path
+                }
+            );
+        }
 
         res.json({ success: true, media: contract.media.at(-1) });
     } catch (err) {
@@ -38,4 +54,3 @@ export const getAllMedia = async (req, res) => {
         res.status(500).json({ error: "Failed to fetch media" });
     }
 };
-

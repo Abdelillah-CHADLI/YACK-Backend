@@ -19,7 +19,7 @@ export const sendMessage = async (req, res) => {
 
         const otherUser = req.isUserA ? contract.userB : contract.userA;
         if (otherUser) {
-            sendNotification(
+            await sendNotification(
                 otherUser,
                 "New Message",
                 `${req.userDoc.firstName}: ${content.substring(0, 50)}`,
