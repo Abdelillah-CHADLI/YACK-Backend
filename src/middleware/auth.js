@@ -11,33 +11,25 @@ export default async function auth(req, res, next) {
         const decoded = await admin.auth().verifyIdToken(token);
         const firebaseID = decoded.uid;
         const firebaseEmail = decoded.email || "";
+        const emailVerified = decoded.email_verified || false;
 
-        // 2. Find user in MongoDB
+        // 2. Find user in MongoDB or create placeholder
         let user = await User.findOne({ firebaseID });
 
-        // 3. If user not found => require first/last name to create
         if (!user) {
-            let { firstName, lastName, fcmToken } = req.body;
-
-            if (!firstName || !lastName)
-                firstName = "unnamed"
-                lastName = "unnamed"
-
-            // return res.status(403).json({
-                //     error: "User doesn't exist. Send firstName and lastName to create."
-                // });
-
             user = await User.create({
                 firebaseID,
-                firstName,
-                lastName,
+                firstName: "",
+                lastName: "",
                 email: firebaseEmail,
-                fcmTokens: fcmToken ? [fcmToken] : []
+                isComplete: false,
+                fcmTokens: []
             });
         }
 
-        // 4. If fcmToken provided => add to device list (no duplicates)
-        const { fcmToken } = req.body;
+        // 3. If fcmToken provided => add to device list (no duplicates)
+        const body = req.body || {};
+        const { fcmToken } = body;
         if (fcmToken) {
             if (!user.fcmTokens.includes(fcmToken)) {
                 user.fcmTokens.push(fcmToken);
@@ -45,8 +37,9 @@ export default async function auth(req, res, next) {
             }
         }
 
-        // 5. Attach user document to request
+        // 4. Attach user document and email verification status to request
         req.userDoc = user;
+        req.emailVerified = emailVerified;
 
         next();
 

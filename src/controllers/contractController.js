@@ -12,11 +12,29 @@ import mongoose from "mongoose";
  */
 export const createContract = async (req, res) => {
     try {
-        const { hash } = req.body;
+        const { hash, titleUserA, descriptionUserA, priceUserA, detailsHash } = req.body;
+
+        // Validate encrypted fields
+        if (!titleUserA || typeof titleUserA !== "string") {
+            return res.status(400).json({ error: "Encrypted title required" });
+        }
+        if (!descriptionUserA || typeof descriptionUserA !== "string") {
+            return res.status(400).json({ error: "Encrypted description required" });
+        }
+        if (!priceUserA || typeof priceUserA !== "string") {
+            return res.status(400).json({ error: "Encrypted price required" });
+        }
+        if (!detailsHash || typeof detailsHash !== "string") {
+            return res.status(400).json({ error: "Details hash required" });
+        }
 
         const temp = await TempContract.create({
             userA: req.userDoc._id,
-            hash: hash || ""
+            hash: hash || "",
+            titleUserA: titleUserA.trim(),
+            descriptionUserA: descriptionUserA.trim(),
+            priceUserA: priceUserA.trim(),
+            detailsHash: detailsHash.trim()
         });
 
         res.json({ success: true, tempID: temp._id });
@@ -33,7 +51,7 @@ export const createContract = async (req, res) => {
  */
 export const joinContract = async (req, res) => {
     try {
-        const { tempID, hash } = req.body;
+        const { tempID, hash, titleUserB, descriptionUserB, priceUserB } = req.body;
 
         if (hash && typeof hash !== "string") {
             return res.status(400).json({ error: "Invalid hash format" });
@@ -63,12 +81,26 @@ export const joinContract = async (req, res) => {
             return res.status(400).json({ error: "Contract already joined" });
         }
 
-        // Add user B
+        // Validate encrypted fields for userB
+        if (!titleUserB || typeof titleUserB !== "string") {
+            return res.status(400).json({ error: "Encrypted title for userB required" });
+        }
+        if (!descriptionUserB || typeof descriptionUserB !== "string") {
+            return res.status(400).json({ error: "Encrypted description for userB required" });
+        }
+        if (!priceUserB || typeof priceUserB !== "string") {
+            return res.status(400).json({ error: "Encrypted price for userB required" });
+        }
+
+        // Add user B and their encrypted details
         temp.userB = req.userDoc._id;
+        temp.titleUserB = titleUserB.trim();
+        temp.descriptionUserB = descriptionUserB.trim();
+        temp.priceUserB = priceUserB.trim();
         await temp.save();
 
         // Fetch userA data
-        const userA = await User.findById(temp.userA).select("firstName lastName");
+        const userA = await User.findById(temp.userA).select("firstName lastName publicKey");
 
         // Notify userA
         await sendNotification(
@@ -77,16 +109,18 @@ export const joinContract = async (req, res) => {
             `${req.userDoc.firstName} joined your contract.`,
             {
                 type: 'contractJoin',
+                tempId: temp._id.toString(),
                 userId: temp.userB.toString(),
                 username: req.userDoc.firstName
             }
         );
 
-        // Return success + userA info
+        // Return success + userA info including public key for encryption
         res.json({
             success: true,
-            userAFullName: userA?.firstName + " " + userA?.lastName|| "",
-            userId: userA?._id
+            userAFullName: userA?.firstName + " " + userA?.lastName || "",
+            userId: userA?._id,
+            userAPublicKey: userA?.publicKey || ""
         });
 
     } catch (err) {
@@ -125,6 +159,7 @@ export const signContract = async (req, res) => {
             "The other user signed.",
             {
                 type: 'contractSign',
+                tempId: temp._id.toString(),
                 userId: uid,
                 username: req.userDoc.firstName
             });
@@ -137,7 +172,14 @@ export const signContract = async (req, res) => {
                 userASign: true,
                 userBSign: true,
                 status: "active",
-                hash: temp.hash || ""
+                hash: temp.hash || "",
+                titleUserA: temp.titleUserA,
+                descriptionUserA: temp.descriptionUserA,
+                priceUserA: temp.priceUserA,
+                titleUserB: temp.titleUserB,
+                descriptionUserB: temp.descriptionUserB,
+                priceUserB: temp.priceUserB,
+                detailsHash: temp.detailsHash
             });
 
             await temp.deleteOne();
@@ -313,12 +355,46 @@ export const verifyContract = async (req, res) => {
 
 export const getContracts = async (req, res) => {
     try {
-        const userId = req.userDoc._id;
+        const userId = req.userDoc._id.toString();
         const contracts = await Contract.find({
-            $or: [{ userA: userId }, { userB: userId }]
-        }).sort({ updatedAt: -1 });
+            $or: [{ userA: req.userDoc._id }, { userB: req.userDoc._id }]
+        })
+            .populate("userA", "firstName lastName publicKey")
+            .populate("userB", "firstName lastName publicKey")
+            .sort({ updatedAt: -1 });
 
-        res.json({ success: true, contracts });
+        // Map contracts to return only the caller's encrypted fields
+        const mappedContracts = contracts.map(contract => {
+            const isUserA = contract.userA._id.toString() === userId;
+            const otherUser = isUserA ? contract.userB : contract.userA;
+
+            return {
+                _id: contract._id,
+                otherUser: {
+                    _id: otherUser._id,
+                    firstName: otherUser.firstName,
+                    lastName: otherUser.lastName,
+                    publicKey: otherUser.publicKey
+                },
+                title: isUserA ? contract.titleUserA : contract.titleUserB,
+                description: isUserA ? contract.descriptionUserA : contract.descriptionUserB,
+                price: isUserA ? contract.priceUserA : contract.priceUserB,
+                detailsHash: contract.detailsHash,
+                status: contract.status,
+                userASign: contract.userASign,
+                userBSign: contract.userBSign,
+                agreedUserA: contract.agreedUserA,
+                agreedUserB: contract.agreedUserB,
+                disputedUserA: contract.disputedUserA,
+                disputedUserB: contract.disputedUserB,
+                hash: contract.hash,
+                isUserA,
+                createdAt: contract.createdAt,
+                updatedAt: contract.updatedAt
+            };
+        });
+
+        res.json({ success: true, contracts: mappedContracts });
 
     } catch (err) {
         console.error(err);
