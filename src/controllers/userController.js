@@ -10,7 +10,7 @@ export const finalizeAccount = async (req, res) => {
             return res.status(403).json({ error: "Email must be verified before finalizing account" });
         }
 
-        const { firstName, lastName, publicKey, encryptedPrivateKey } = req.body || {};
+        const { firstName, lastName, publicKey, encryptedPrivateKey, salt , iv } = req.body || {};
 
         // Validate required fields
         if (!firstName || typeof firstName !== "string" || !firstName.trim()) {
@@ -26,6 +26,14 @@ export const finalizeAccount = async (req, res) => {
             return res.status(400).json({ error: "Encrypted private key is required" });
         }
 
+        if (!salt || typeof salt !== "string" || !salt.trim()) {
+            return res.status(400).json({ error: "Salt key is required" });
+        }
+
+        if (!iv || typeof iv !== "string" || !iv.trim()) {
+            return res.status(400).json({ error: "Iv.trimmed is required" });
+        }
+
         // Check if already finalized
         if (req.userDoc.isComplete) {
             return res.status(400).json({ error: "Account already finalized" });
@@ -39,6 +47,8 @@ export const finalizeAccount = async (req, res) => {
                     lastName: lastName.trim(),
                     publicKey: publicKey.trim(),
                     encryptedPrivateKey: encryptedPrivateKey.trim(),
+                    salt: salt.trim(),
+                    iv: iv.trim(),
                     isComplete: true
                 }
             },
@@ -79,7 +89,9 @@ export const getProfile = async (req, res) => {
                 email: user.email,
                 publicKey: user.publicKey,
                 encryptedPrivateKey: user.encryptedPrivateKey,
-                isComplete: user.isComplete
+                isComplete: user.isComplete,
+                salt: user.salt,
+                iv: user.iv,
             }
         });
 
@@ -94,15 +106,27 @@ export const getProfile = async (req, res) => {
  */
 export const updatePrivateKey = async (req, res) => {
     try {
-        const { encryptedPrivateKey } = req.body || {};
+        const { encryptedPrivateKey, salt , iv  } = req.body || {};
 
         if (!encryptedPrivateKey || typeof encryptedPrivateKey !== "string" || !encryptedPrivateKey.trim()) {
             return res.status(400).json({ error: "Encrypted private key is required" });
         }
 
+        if (!salt || typeof salt !== "string" || !salt.trim()) {
+            return res.status(400).json({ error: "Salt key is required" });
+        }
+
+        if (!iv || typeof iv !== "string" || !iv.trim()) {
+            return res.status(400).json({ error: "Iv.trimmed is required" });
+        }
+
         const updated = await User.findByIdAndUpdate(
             req.userDoc._id,
-            { $set: { encryptedPrivateKey: encryptedPrivateKey.trim() } },
+            { $set: {
+                encryptedPrivateKey: encryptedPrivateKey.trim(),
+                salt: salt.trim(),
+                iv: iv.trim()
+            } },
             { new: true }
         );
 

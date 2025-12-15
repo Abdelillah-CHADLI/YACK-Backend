@@ -28,7 +28,8 @@ export default async function auth(req, res, next) {
         }
 
         // 3. If fcmToken provided => add to device list (no duplicates)
-        const { fcmToken } = req.body;
+        const body = req.body || {};
+        const { fcmToken } = body;
         if (fcmToken) {
             if (!user.fcmTokens.includes(fcmToken)) {
                 user.fcmTokens.push(fcmToken);

@@ -11,6 +11,9 @@ const UserSchema = new mongoose.Schema({
     publicKey:          { type: String, default: "" },
     encryptedPrivateKey: { type: String, default: "" },
 
+    salt: { type: String, default: "" },
+    iv: { type: String,  default: "" },
+
     isComplete: { type: Boolean, default: false },  // true after finalize
 
     fcmTokens: [{ type: String }]  // multi-device support

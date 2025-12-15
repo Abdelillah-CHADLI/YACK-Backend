@@ -159,6 +159,7 @@ export const signContract = async (req, res) => {
             "The other user signed.",
             {
                 type: 'contractSign',
+                tempId: temp._id.toString(),
                 userId: uid,
                 username: req.userDoc.firstName
             });
@@ -358,9 +359,9 @@ export const getContracts = async (req, res) => {
         const contracts = await Contract.find({
             $or: [{ userA: req.userDoc._id }, { userB: req.userDoc._id }]
         })
-        .populate("userA", "firstName lastName publicKey")
-        .populate("userB", "firstName lastName publicKey")
-        .sort({ updatedAt: -1 });
+            .populate("userA", "firstName lastName publicKey")
+            .populate("userB", "firstName lastName publicKey")
+            .sort({ updatedAt: -1 });
 
         // Map contracts to return only the caller's encrypted fields
         const mappedContracts = contracts.map(contract => {

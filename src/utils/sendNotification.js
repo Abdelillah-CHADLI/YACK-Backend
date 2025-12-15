@@ -4,16 +4,22 @@ import User from "../models/User.js";
 export async function sendNotification(userID, title, body, data = {}) {
     const user = await User.findById(userID);
 
+
     if (!user || !user.fcmTokens.length)
         return;
+
+    // FCM requires ALL data values to be strings
+    const safeData = Object.fromEntries(
+        Object.entries(data).map(([k, v]) => [k, String(v)])
+    );
 
     const messages = user.fcmTokens.map(token => ({
         token,
         notification: {
             title,
-            body,
-            data
+            body
         },
+        data: safeData,
         android: { priority: "high" },  // faster
         apns: { headers: { "apns-priority": "10" } }
     }));
@@ -29,6 +35,7 @@ export async function sendNotification(userID, title, body, data = {}) {
     let changed = false;
 
     response.responses.forEach((res, idx) => {
+        console.log(`FCM response for token ${user.fcmTokens[idx]}:`, res);
         if (!res.success && res.error) {
             const errCode = res.error.code;
 
