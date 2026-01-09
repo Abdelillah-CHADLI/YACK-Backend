@@ -16,7 +16,9 @@ const UserSchema = new mongoose.Schema({
 
     isComplete: { type: Boolean, default: false },  // true after finalize
 
-    fcmTokens: [{ type: String }]  // multi-device support
+    fcmTokens: [{ type: String }],  // multi-device support
+    
+    language: { type: String, default: "en", enum: ["en", "fr", "ar"] }  // User's preferred language
 
 }, { timestamps: true });
 

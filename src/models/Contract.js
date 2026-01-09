@@ -10,7 +10,12 @@ const EmbeddedMessageSchema = new mongoose.Schema({
 
 const EmbeddedMediaSchema = new mongoose.Schema({
     who:     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    content: { type: String, required: true },
+    content: { type: String, required: true },  // Path to encrypted file
+    encryptedKey: { type: String, default: "" },  // RSA-encrypted AES key (base64)
+    iv: { type: String, default: "" },  // Initialization vector (base64)
+    authTag: { type: String, default: "" },  // GCM authentication tag (base64)
+    originalFilename: { type: String, default: "" },  // Original filename
+    mimeType: { type: String, default: "" },  // MIME type
     createdAt: { type: Date, default: Date.now }
 }, { _id: true });
 
