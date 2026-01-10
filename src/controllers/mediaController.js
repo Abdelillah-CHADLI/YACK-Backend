@@ -1,6 +1,5 @@
 import { MediaHandler } from "../utils/mediaHandler.js";
 import Contract from "../models/Contract.js";
-import User from "../models/User.js";
 import { sendNotification } from "../utils/sendNotification.js";
 
 export const sendMedia = async (req, res) => {
@@ -11,24 +10,15 @@ export const sendMedia = async (req, res) => {
         }
 
         const contract = req.contract;
-        
-        // Get recipient's public key for encryption
         const recipientId = req.isUserA ? contract.userB : contract.userA;
-        const recipient = await User.findById(recipientId).select('publicKey firstName lastName');
-        
-        if (!recipient || !recipient.publicKey) {
-            return res.status(400).json({ error: "Recipient public key not found" });
-        }
 
-        // Store encrypted media
-        const stored = await MediaHandler.send(file, recipient.publicKey);
+        // Upload media to Cloudinary (no encryption)
+        const stored = await MediaHandler.send(file);
 
         const entry = {
             who: req.userDoc._id,
             content: stored.path,
-            encryptedKey: stored.encryptedKey,
-            iv: stored.iv,
-            authTag: stored.authTag,
+            url: stored.url,
             originalFilename: stored.originalFilename,
             mimeType: stored.mimeType
         };
@@ -92,19 +82,16 @@ export const getMedia = async (req, res) => {
             return res.status(404).json({ error: "Media not found" });
         }
 
-        // Get encrypted media and metadata
+        // Get media details from Cloudinary
         const mediaData = await MediaHandler.get(mediaEntry.content);
 
         res.json({
             success: true,
             media: {
                 _id: mediaEntry._id,
-                encryptedData: mediaData.encryptedData,
-                encryptedKey: mediaData.encryptedKey || mediaEntry.encryptedKey,
-                iv: mediaData.iv || mediaEntry.iv,
-                authTag: mediaData.authTag || mediaEntry.authTag,
-                originalFilename: mediaData.originalFilename || mediaEntry.originalFilename,
-                mimeType: mediaData.mimeType || mediaEntry.mimeType,
+                url: mediaData.url,
+                originalFilename: mediaEntry.originalFilename,
+                mimeType: mediaEntry.mimeType,
                 createdAt: mediaEntry.createdAt
             }
         });

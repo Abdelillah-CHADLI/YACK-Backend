@@ -1,122 +1,89 @@
-import fs from "fs/promises";
-import path from "path";
-import { fileURLToPath } from "url";
 import crypto from "crypto";
-import { CryptoHandler } from "./cryptoHandler.js";
+import path from "path";
+import { v2 as cloudinary } from "cloudinary";
 
-// Get directory name in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Use environment variable or fallback to a path relative to project root
-const MEDIA_ROOT = process.env.UPLOAD_DIR || path.resolve(__dirname, "../../uploads");
+// Configure Cloudinary
+cloudinary.config({
+    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dpco4ijun',
+    api_key: process.env.CLOUDINARY_API_KEY || '593764572246722',
+    api_secret: process.env.CLOUDINARY_API_SECRET
+});
 
 export class MediaHandler {
 
-    static async ensureUploadDir() {
-        try {
-            await fs.mkdir(MEDIA_ROOT, { recursive: true });
-        } catch (err) {
-            if (err.code !== 'EEXIST') {
-                console.error(`Failed to create upload directory: ${MEDIA_ROOT}`, err);
-                throw new Error(`Cannot create upload directory: ${err.message}`);
-            }
-        }
-    }
-
-    static async send(media, publicKeyBase64) {
+    static async send(media) {
         if (!media || !media.buffer || !media.filename) {
             throw new Error("Invalid media payload");
         }
 
-        if (!publicKeyBase64) {
-            throw new Error("Public key required for encryption");
-        }
-
-        const fileBuffer = Buffer.from(media.buffer, 'base64');
-
-        const { encryptedData, encryptedKey, iv, authTag } = CryptoHandler.encryptMedia(
-            fileBuffer,
-            publicKeyBase64
-        );
-
-        // Create unique filename to avoid collisions
+        // Create unique public_id to avoid collisions
         const timestamp = Date.now();
         const randomStr = crypto.randomBytes(8).toString('hex');
         const ext = path.extname(media.filename);
         const baseName = path.basename(media.filename, ext);
-        const encryptedFilename = `${baseName}_${timestamp}_${randomStr}${ext}.enc`;
+        const publicId = `media/${baseName}_${timestamp}_${randomStr}`;
 
-        // Ensure upload directory exists
-        await this.ensureUploadDir();
-        const filePath = path.join(MEDIA_ROOT, encryptedFilename);
+        // Convert base64 buffer to data URI for upload
+        const mimeType = media.mimeType || 'application/octet-stream';
+        const dataUri = `data:${mimeType};base64,${media.buffer}`;
 
-        // Store encrypted file
-        await fs.writeFile(filePath, encryptedData);
-
-        // Store metadata separately (encrypted key, iv, authTag)
-        const metadataPath = `${filePath}.meta`;
-        const metadata = {
-            encryptedKey: encryptedKey.toString('base64'),
-            iv: iv.toString('base64'),
-            authTag: authTag.toString('base64'),
-            originalFilename: media.filename,
-            mimeType: media.mimeType || 'application/octet-stream'
-        };
-        await fs.writeFile(metadataPath, JSON.stringify(metadata));
+        // Upload to Cloudinary
+        const uploadResult = await cloudinary.uploader.upload(dataUri, {
+            public_id: publicId,
+            resource_type: 'auto',
+            folder: 'yack-media'
+        });
 
         return {
-            path: filePath,
+            path: uploadResult.public_id,
+            url: uploadResult.secure_url,
             originalFilename: media.filename,
-            mimeType: media.mimeType,
-            encryptedKey: metadata.encryptedKey,
-            iv: metadata.iv,
-            authTag: metadata.authTag
+            mimeType: mimeType,
+            cloudinaryId: uploadResult.public_id,
+            format: uploadResult.format,
+            size: uploadResult.bytes
         };
     }
 
-    static async get(mediaPath) {
-        if (!mediaPath) {
-            throw new Error("Media path required");
+    static async get(publicId) {
+        if (!publicId) {
+            throw new Error("Public ID required");
         }
 
-        const encryptedData = await fs.readFile(mediaPath);
-        const metadataPath = `${mediaPath}.meta`;
-
-        let metadata = {};
-        try {
-            const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-            metadata = JSON.parse(metadataContent);
-        } catch (err) {
-            console.error(`Failed to read metadata for ${mediaPath}:`, err);
-        }
+        // Get resource details from Cloudinary
+        const result = await cloudinary.api.resource(publicId, {
+            resource_type: 'auto'
+        });
 
         return {
-            encryptedData: encryptedData.toString('base64'),
-            ...metadata
+            url: result.secure_url,
+            publicId: result.public_id,
+            format: result.format,
+            size: result.bytes,
+            createdAt: result.created_at
         };
     }
 
-    static async decrypt(mediaPath, privateKeyPEM) {
-        if (!mediaPath || !privateKeyPEM) {
-            throw new Error("Media path and private key required");
+    static getUrl(publicId, options = {}) {
+        if (!publicId) {
+            throw new Error("Public ID required");
         }
 
-        const encryptedData = await fs.readFile(mediaPath);
-        const metadataPath = `${mediaPath}.meta`;
-        const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-        const metadata = JSON.parse(metadataContent);
+        // Generate optimized URL
+        return cloudinary.url(publicId, {
+            fetch_format: 'auto',
+            quality: 'auto',
+            ...options
+        });
+    }
 
-        const encryptedKey = Buffer.from(metadata.encryptedKey, 'base64');
-        const iv = Buffer.from(metadata.iv, 'base64');
-        const authTag = Buffer.from(metadata.authTag, 'base64');
+    static async delete(publicId) {
+        if (!publicId) {
+            throw new Error("Public ID required");
+        }
 
-        return CryptoHandler.decryptMedia(
-            encryptedData,
-            encryptedKey,
-            iv,
-            authTag,
-            privateKeyPEM
-        );
+        await cloudinary.uploader.destroy(publicId, {
+            resource_type: 'auto'
+        });
     }
 }
