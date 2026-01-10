@@ -48,28 +48,34 @@ export class CryptoHandler {
         try {
             // Decode base64 to get JSON string
             const jsonStr = Buffer.from(base64Key, 'base64').toString('utf-8');
-            const keyData = JSON.parse(jsonStr);
-            
-            // Extract modulus and exponent
-            const n = BigInt(keyData.n);
-            const e = BigInt(keyData.e);
-            
-            // Convert to Buffer for DER encoding
-            const nBuffer = Buffer.from(n.toString(16).padStart(512, '0'), 'hex');
-            const eBuffer = Buffer.from(e.toString(16).padStart(6, '0'), 'hex');
-            
-            // Create DER structure for RSA public key
-            // This is a simplified approach - for production, consider using 'node-forge' library
-            const derKey = crypto.createPublicKey({
-                key: {
-                    n: nBuffer,
-                    e: eBuffer
-                },
-                format: 'jwk',
-                type: 'pkcs1'
+            let keyData = JSON.parse(jsonStr);
+
+            // Ensure we have a proper JWK object with required 'kty' property
+            // If keyData has 'n' and 'e' but missing 'kty', add it for RSA
+            if (keyData.n && keyData.e && !keyData.kty) {
+                keyData.kty = 'RSA';
+            }
+
+            // Validate that we have a proper JWK
+            if (!keyData.kty) {
+                throw new Error("Invalid JWK: missing 'kty' property");
+            }
+
+            if (keyData.kty !== 'RSA') {
+                throw new Error(`Unsupported key type: ${keyData.kty}. Only RSA is supported.`);
+            }
+
+            if (!keyData.n || !keyData.e) {
+                throw new Error("Invalid RSA JWK: missing 'n' or 'e' property");
+            }
+
+            // Create public key from JWK format
+            const publicKey = crypto.createPublicKey({
+                key: keyData,
+                format: 'jwk'
             });
             
-            return derKey.export({ type: 'spki', format: 'pem' });
+            return publicKey.export({ type: 'spki', format: 'pem' });
         } catch (err) {
             throw new Error(`Failed to convert public key to PEM: ${err.message}`);
         }
