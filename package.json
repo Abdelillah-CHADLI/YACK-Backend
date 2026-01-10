@@ -19,6 +19,7 @@
   },
   "homepage": "https://github.com/generalBenmalek/yack-backend#readme",
   "dependencies": {
+    "cloudinary": "^2.8.0",
     "cors": "^2.8.5",
     "express": "^5.1.0",
     "firebase-admin": "^13.6.0",
