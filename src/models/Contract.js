@@ -10,7 +10,10 @@ const EmbeddedMessageSchema = new mongoose.Schema({
 
 const EmbeddedMediaSchema = new mongoose.Schema({
     who:     { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
-    content: { type: String, required: true },
+    content: { type: String, required: true },  // Cloudinary public_id
+    url: { type: String, default: "" },  // Cloudinary secure URL
+    originalFilename: { type: String, default: "" },  // Original filename
+    mimeType: { type: String, default: "" },  // MIME type
     createdAt: { type: Date, default: Date.now }
 }, { _id: true });
 

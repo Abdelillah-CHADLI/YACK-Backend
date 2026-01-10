@@ -105,13 +105,19 @@ export const joinContract = async (req, res) => {
         // Notify userA
         await sendNotification(
             temp.userA,
-            "Contract Update",
-            `${req.userDoc.firstName} joined your contract.`,
+            "contract_joined",
+            "",
             {
                 type: 'contractJoin',
                 tempId: temp._id.toString(),
                 userId: temp.userB.toString(),
                 username: req.userDoc.firstName
+            },
+            {
+                localize: true,
+                params: {
+                    name: req.userDoc.firstName
+                }
             }
         );
 
@@ -154,15 +160,23 @@ export const signContract = async (req, res) => {
 
         // notify other user
         const other = uid === temp.userA?.toString() ? temp.userB : temp.userA;
-        if (other) await sendNotification(other,
-            "Contract Update",
-            "The other user signed.",
+        if (other) await sendNotification(
+            other,
+            "contract_signed",
+            "",
             {
                 type: 'contractSign',
                 tempId: temp._id.toString(),
                 userId: uid,
                 username: req.userDoc.firstName
-            });
+            },
+            {
+                localize: true,
+                params: {
+                    name: req.userDoc.firstName
+                }
+            }
+        );
 
         // if both signed => finalize
         if (temp.userASign && temp.userBSign) {
@@ -233,12 +247,19 @@ export const acceptContract = async (req, res) => {
         if (otherUser) {
             await sendNotification(
                 otherUser,
-                "Contract Accepted",
-                `${req.userDoc.firstName} accepted the contract.`,
+                "contract_accepted",
+                "",
                 {
                     type: "contractAccept",
                     userId: uid,
-                    username: req.userDoc.firstName
+                    username: req.userDoc.firstName,
+                    contractId: contract._id.toString()
+                },
+                {
+                    localize: true,
+                    params: {
+                        name: req.userDoc.firstName
+                    }
                 }
             );
         }
@@ -297,13 +318,20 @@ export const disputeContract = async (req, res) => {
         if (otherUser) {
             await sendNotification(
                 otherUser,
-                "Contract Disputed",
-                `${req.userDoc.firstName} disputed the contract.`,
+                "contract_disputed",
+                "",
                 {
                     type: "contractDispute",
                     reason,
                     userId: uid,
-                    username: req.userDoc.firstName
+                    username: req.userDoc.firstName,
+                    contractId: contract._id.toString()
+                },
+                {
+                    localize: true,
+                    params: {
+                        name: req.userDoc.firstName
+                    }
                 }
             );
         }

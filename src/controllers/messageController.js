@@ -31,11 +31,17 @@ export const sendMessage = async (req, res) => {
         if (otherUser) {
             await sendNotification(
                 otherUser,
-                "New Message",
-                `${req.userDoc.firstName} sent you a message`,
+                "new_message",
+                "",
                 {
                     type: "contractMessage",
                     contractId: contract._id.toString()
+                },
+                {
+                    localize: true,
+                    params: {
+                        name: req.userDoc.firstName
+                    }
                 }
             );
         }

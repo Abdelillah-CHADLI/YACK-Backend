@@ -143,11 +143,11 @@ export const updatePrivateKey = async (req, res) => {
 
 export const updateProfile = async (req, res) => {
 
-    // body firstName , lastName, profilePicture ( later ) all optional and will be updated after
+    // body firstName , lastName, language, profilePicture ( later ) all optional and will be updated after
     // req.userDoc stores user instance
 
     try {
-        const { firstName, lastName } = req.body || {};
+        const { firstName, lastName, language } = req.body || {};
 
         const nextValues = {};
         if (typeof firstName === "string" && firstName.trim()) {
@@ -156,6 +156,10 @@ export const updateProfile = async (req, res) => {
 
         if (typeof lastName === "string" && lastName.trim()) {
             nextValues.lastName = lastName.trim();
+        }
+
+        if (typeof language === "string" && ['en', 'fr', 'ar'].includes(language)) {
+            nextValues.language = language;
         }
 
         if (!Object.keys(nextValues).length) {
@@ -174,7 +178,8 @@ export const updateProfile = async (req, res) => {
                 id: updated._id,
                 firstName: updated.firstName,
                 lastName: updated.lastName,
-                email: updated.email
+                email: updated.email,
+                language: updated.language
             }
         });
 

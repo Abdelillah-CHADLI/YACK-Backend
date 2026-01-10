@@ -1,12 +1,28 @@
 import admin from "../config/firebase.js";
 import User from "../models/User.js";
+import { NotificationLocalization } from "./notificationLocalization.js";
 
-export async function sendNotification(userID, title, body, data = {}) {
+
+export async function sendNotification(userID, titleOrType, body = "", data = {}, options = {}) {
     const user = await User.findById(userID);
-
 
     if (!user || !user.fcmTokens.length)
         return;
+
+    let title = titleOrType;
+    let notificationBody = body;
+
+    // If localization is requested, use NotificationLocalization
+    if (options.localize) {
+        const userLanguage = user.language || 'en';
+        const localized = NotificationLocalization.getNotification(
+            titleOrType,
+            userLanguage,
+            options.params || {}
+        );
+        title = localized.title;
+        notificationBody = localized.body;
+    }
 
     // FCM requires ALL data values to be strings
     const safeData = Object.fromEntries(
@@ -17,7 +33,7 @@ export async function sendNotification(userID, title, body, data = {}) {
         token,
         notification: {
             title,
-            body
+            body: notificationBody
         },
         data: safeData,
         android: { priority: "high" },  // faster
