@@ -1,11 +1,28 @@
 import fs from "fs/promises";
 import path from "path";
+import { fileURLToPath } from "url";
 import crypto from "crypto";
 import { CryptoHandler } from "./cryptoHandler.js";
 
-const MEDIA_ROOT = path.join(process.cwd(), "uploads");
+// Get directory name in ES modules
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Use environment variable or fallback to a path relative to project root
+const MEDIA_ROOT = process.env.UPLOAD_DIR || path.resolve(__dirname, "../../uploads");
 
 export class MediaHandler {
+
+    static async ensureUploadDir() {
+        try {
+            await fs.mkdir(MEDIA_ROOT, { recursive: true });
+        } catch (err) {
+            if (err.code !== 'EEXIST') {
+                console.error(`Failed to create upload directory: ${MEDIA_ROOT}`, err);
+                throw new Error(`Cannot create upload directory: ${err.message}`);
+            }
+        }
+    }
 
     static async send(media, publicKeyBase64) {
         if (!media || !media.buffer || !media.filename) {
@@ -30,7 +47,8 @@ export class MediaHandler {
         const baseName = path.basename(media.filename, ext);
         const encryptedFilename = `${baseName}_${timestamp}_${randomStr}${ext}.enc`;
 
-        await fs.mkdir(MEDIA_ROOT, { recursive: true });
+        // Ensure upload directory exists
+        await this.ensureUploadDir();
         const filePath = path.join(MEDIA_ROOT, encryptedFilename);
 
         // Store encrypted file
