@@ -11,7 +11,7 @@ export const sendMedia = async (req, res) => {
         }
 
         const contract = req.contract;
-        
+
         // Get recipient's public key for encryption
         const recipientId = req.isUserA ? contract.userB : contract.userA;
         const recipient = await User.findById(recipientId).select('publicKey firstName lastName');
@@ -92,13 +92,17 @@ export const getMedia = async (req, res) => {
             return res.status(404).json({ error: "Media not found" });
         }
 
-        // Get encrypted media and metadata
+        // Get encrypted media and metadata from Firebase Storage
         const mediaData = await MediaHandler.get(mediaEntry.content);
+
+        // Get a fresh signed URL for download
+        const signedUrl = await MediaHandler.getSignedUrl(mediaEntry.content, 60);
 
         res.json({
             success: true,
             media: {
                 _id: mediaEntry._id,
+                url: signedUrl,
                 encryptedData: mediaData.encryptedData,
                 encryptedKey: mediaData.encryptedKey || mediaEntry.encryptedKey,
                 iv: mediaData.iv || mediaEntry.iv,
@@ -113,3 +117,33 @@ export const getMedia = async (req, res) => {
         res.status(500).json({ error: "Failed to retrieve media" });
     }
 };
+
+export const getMediaUrl = async (req, res) => {
+    try {
+        const { mediaId } = req.query;
+
+        if (!mediaId) {
+            return res.status(400).json({ error: "Media ID required" });
+        }
+
+        const contract = req.contract;
+        const mediaEntry = contract.media.id(mediaId);
+
+        if (!mediaEntry) {
+            return res.status(404).json({ error: "Media not found" });
+        }
+
+        // Get a fresh signed URL (valid for 60 minutes)
+        const signedUrl = await MediaHandler.getSignedUrl(mediaEntry.content, 60);
+
+        res.json({
+            success: true,
+            url: signedUrl,
+            expiresIn: 60 * 60 // seconds
+        });
+    } catch (err) {
+        console.error(err);
+        res.status(500).json({ error: "Failed to get media URL" });
+    }
+};
+

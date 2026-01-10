@@ -1,28 +1,9 @@
-import fs from "fs/promises";
-import path from "path";
-import { fileURLToPath } from "url";
 import crypto from "crypto";
+import path from "path";
+import { bucket } from "../config/firebase.js";
 import { CryptoHandler } from "./cryptoHandler.js";
 
-// Get directory name in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// Use environment variable or fallback to a path relative to project root
-const MEDIA_ROOT = process.env.UPLOAD_DIR || path.resolve(__dirname, "../../uploads");
-
 export class MediaHandler {
-
-    static async ensureUploadDir() {
-        try {
-            await fs.mkdir(MEDIA_ROOT, { recursive: true });
-        } catch (err) {
-            if (err.code !== 'EEXIST') {
-                console.error(`Failed to create upload directory: ${MEDIA_ROOT}`, err);
-                throw new Error(`Cannot create upload directory: ${err.message}`);
-            }
-        }
-    }
 
     static async send(media, publicKeyBase64) {
         if (!media || !media.buffer || !media.filename) {
@@ -45,78 +26,87 @@ export class MediaHandler {
         const randomStr = crypto.randomBytes(8).toString('hex');
         const ext = path.extname(media.filename);
         const baseName = path.basename(media.filename, ext);
-        const encryptedFilename = `${baseName}_${timestamp}_${randomStr}${ext}.enc`;
+        const encryptedFilename = `media/${baseName}_${timestamp}_${randomStr}${ext}.enc`;
 
-        // Ensure upload directory exists
-        await this.ensureUploadDir();
-        const filePath = path.join(MEDIA_ROOT, encryptedFilename);
+        // Upload encrypted file to Firebase Storage
+        const file = bucket.file(encryptedFilename);
+        await file.save(encryptedData, {
+            metadata: {
+                contentType: 'application/octet-stream',
+                metadata: {
+                    encryptedKey: encryptedKey.toString('base64'),
+                    iv: iv.toString('base64'),
+                    authTag: authTag.toString('base64'),
+                    originalFilename: media.filename,
+                    mimeType: media.mimeType || 'application/octet-stream'
+                }
+            }
+        });
 
-        // Store encrypted file
-        await fs.writeFile(filePath, encryptedData);
-
-        // Store metadata separately (encrypted key, iv, authTag)
-        const metadataPath = `${filePath}.meta`;
-        const metadata = {
-            encryptedKey: encryptedKey.toString('base64'),
-            iv: iv.toString('base64'),
-            authTag: authTag.toString('base64'),
-            originalFilename: media.filename,
-            mimeType: media.mimeType || 'application/octet-stream'
-        };
-        await fs.writeFile(metadataPath, JSON.stringify(metadata));
+        // Get the public URL or signed URL
+        const [url] = await file.getSignedUrl({
+            action: 'read',
+            expires: '01-01-2100' // Long expiry for permanent access
+        });
 
         return {
-            path: filePath,
+            path: encryptedFilename,
+            url: url,
             originalFilename: media.filename,
             mimeType: media.mimeType,
-            encryptedKey: metadata.encryptedKey,
-            iv: metadata.iv,
-            authTag: metadata.authTag
+            encryptedKey: encryptedKey.toString('base64'),
+            iv: iv.toString('base64'),
+            authTag: authTag.toString('base64')
         };
     }
 
-    static async get(mediaPath) {
-        if (!mediaPath) {
-            throw new Error("Media path required");
+    static async get(filePath) {
+        if (!filePath) {
+            throw new Error("File path required");
         }
 
-        const encryptedData = await fs.readFile(mediaPath);
-        const metadataPath = `${mediaPath}.meta`;
+        const file = bucket.file(filePath);
 
-        let metadata = {};
-        try {
-            const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-            metadata = JSON.parse(metadataContent);
-        } catch (err) {
-            console.error(`Failed to read metadata for ${mediaPath}:`, err);
+        // Check if file exists
+        const [exists] = await file.exists();
+        if (!exists) {
+            throw new Error("File not found");
         }
+
+        // Get file data and metadata
+        const [data] = await file.download();
+        const [metadata] = await file.getMetadata();
 
         return {
-            encryptedData: encryptedData.toString('base64'),
-            ...metadata
+            encryptedData: data.toString('base64'),
+            encryptedKey: metadata.metadata?.encryptedKey,
+            iv: metadata.metadata?.iv,
+            authTag: metadata.metadata?.authTag,
+            originalFilename: metadata.metadata?.originalFilename,
+            mimeType: metadata.metadata?.mimeType
         };
     }
 
-    static async decrypt(mediaPath, privateKeyPEM) {
-        if (!mediaPath || !privateKeyPEM) {
-            throw new Error("Media path and private key required");
+    static async getSignedUrl(filePath, expiresInMinutes = 60) {
+        if (!filePath) {
+            throw new Error("File path required");
         }
 
-        const encryptedData = await fs.readFile(mediaPath);
-        const metadataPath = `${mediaPath}.meta`;
-        const metadataContent = await fs.readFile(metadataPath, 'utf-8');
-        const metadata = JSON.parse(metadataContent);
+        const file = bucket.file(filePath);
+        const [url] = await file.getSignedUrl({
+            action: 'read',
+            expires: Date.now() + expiresInMinutes * 60 * 1000
+        });
 
-        const encryptedKey = Buffer.from(metadata.encryptedKey, 'base64');
-        const iv = Buffer.from(metadata.iv, 'base64');
-        const authTag = Buffer.from(metadata.authTag, 'base64');
+        return url;
+    }
 
-        return CryptoHandler.decryptMedia(
-            encryptedData,
-            encryptedKey,
-            iv,
-            authTag,
-            privateKeyPEM
-        );
+    static async delete(filePath) {
+        if (!filePath) {
+            throw new Error("File path required");
+        }
+
+        const file = bucket.file(filePath);
+        await file.delete();
     }
 }
