@@ -310,7 +310,7 @@ export const disputeContract = async (req, res) => {
             contract.agreedUserB = false;
         }
 
-        contract.status = "dispatched";
+        contract.status = "disputed";
 
         await contract.save();
 
