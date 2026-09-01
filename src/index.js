@@ -1,4 +1,5 @@
 // src/index.js
+import "dotenv/config";          // Load .env if present (see also --env-file in npm scripts)
 import express from "express";
 import cors from "cors";
 import "./config/mongo.js";           // Connect to MongoDB

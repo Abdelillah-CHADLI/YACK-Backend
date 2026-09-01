@@ -2,11 +2,23 @@ import crypto from "crypto";
 import path from "path";
 import { v2 as cloudinary } from "cloudinary";
 
-// Configure Cloudinary
+// Cloudinary configuration. Credentials must be provided via environment
+// variables (CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY, CLOUDINARY_API_SECRET).
+const CLOUD_NAME = process.env.CLOUDINARY_CLOUD_NAME;
+const API_KEY = process.env.CLOUDINARY_API_KEY;
+const API_SECRET = process.env.CLOUDINARY_API_SECRET;
+
+if (!CLOUD_NAME || !API_KEY || !API_SECRET) {
+    throw new Error(
+        "Cloudinary is not configured. Set CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and " +
+        "CLOUDINARY_API_SECRET in your environment (or .env file)."
+    );
+}
+
 cloudinary.config({
-    cloud_name: process.env.CLOUDINARY_CLOUD_NAME || 'dpco4ijun',
-    api_key: process.env.CLOUDINARY_API_KEY || '593764572246722',
-    api_secret: process.env.CLOUDINARY_API_SECRET
+    cloud_name: CLOUD_NAME,
+    api_key: API_KEY,
+    api_secret: API_SECRET,
 });
 
 export class MediaHandler {
