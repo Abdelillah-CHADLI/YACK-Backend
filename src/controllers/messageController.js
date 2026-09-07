@@ -1,86 +1,123 @@
-import { sendNotification } from "../utils/sendNotification.js";
+import mongoose from "mongoose";
 import Contract from "../models/Contract.js";
+import { sendNotification } from "../utils/sendNotification.js";
+import {
+    parseMessageLimit,
+    validateEncryptedMessage,
+} from "../utils/messageValidation.js";
 
 export const sendMessage = async (req, res) => {
+    let validated;
     try {
-        const { contentForSender, contentForRecipient, contentHash } = req.body;
+        validated = validateEncryptedMessage(req.body);
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
 
-        // Validate encrypted content fields
-        if (!contentForSender || typeof contentForSender !== "string") {
-            return res.status(400).json({ error: "Encrypted content for sender required" });
-        }
-        if (!contentForRecipient || typeof contentForRecipient !== "string") {
-            return res.status(400).json({ error: "Encrypted content for recipient required" });
-        }
-        if (!contentHash || typeof contentHash !== "string") {
-            return res.status(400).json({ error: "Content hash required" });
-        }
-
-        const contract = req.contract;
+    try {
+        const createdAt = new Date();
         const entry = {
+            _id: new mongoose.Types.ObjectId(),
             who: req.userDoc._id,
-            contentForSender: contentForSender.trim(),
-            contentForRecipient: contentForRecipient.trim(),
-            contentHash: contentHash.trim()
+            ...validated,
+            createdAt,
         };
 
-        contract.messages.push(entry);
-        await contract.save();
+        // An atomic append avoids stale-document saves dropping concurrent messages.
+        const updated = await Contract.findOneAndUpdate(
+            {
+                _id: req.contract._id,
+                $or: [{ userA: req.userDoc._id }, { userB: req.userDoc._id }],
+            },
+            { $push: { messages: entry } },
+            { new: true, runValidators: true, projection: { userA: 1, userB: 1 } }
+        );
 
-        const otherUser = req.isUserA ? contract.userB : contract.userA;
-        if (otherUser) {
-            await sendNotification(
-                otherUser,
+        if (!updated) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        res.status(201).json({
+            success: true,
+            message: {
+                ...entry,
+                who: {
+                    _id: req.userDoc._id,
+                    firstName: req.userDoc.firstName,
+                    lastName: req.userDoc.lastName,
+                },
+                content: validated.contentForSender,
+            },
+        });
+
+        const recipientId = req.isUserA ? updated.userB : updated.userA;
+        if (recipientId) {
+            // Push delivery is deliberately best effort and can never turn a
+            // successfully persisted message into a client-visible failure.
+            void sendNotification(
+                recipientId,
                 "new_message",
                 "",
                 {
                     type: "contractMessage",
-                    contractId: contract._id.toString()
+                    contractId: updated._id.toString(),
+                    messageId: entry._id.toString(),
                 },
                 {
                     localize: true,
-                    params: {
-                        name: req.userDoc.firstName
-                    }
+                    params: { name: req.userDoc.firstName },
                 }
             );
         }
-
-        res.json({ success: true, message: contract.messages.at(-1) });
-    } catch (err) {
-        console.error(err);
-        res.status(500).json({ error: "Failed to send message" });
+    } catch (error) {
+        console.error("[messages] Failed to send message:", error.message);
+        if (!res.headersSent) {
+            res.status(500).json({ error: "Failed to send message" });
+        }
     }
 };
 
 export const getAllMessages = async (req, res) => {
+    let limit;
     try {
-        const limit = Number(req.query.limit) || 50;
+        limit = parseMessageLimit(req.query.limit);
+    } catch (error) {
+        return res.status(400).json({ error: error.message });
+    }
+
+    try {
+        // Slice in MongoDB rather than loading an unbounded embedded array into
+        // the API process. The client currently requests the newest page.
         const contract = await Contract.findById(req.contract._id)
-            .select("messages userA userB")
+            .select({ messages: { $slice: -limit }, userA: 1, userB: 1 })
             .populate("messages.who", "firstName lastName");
 
-        const userId = req.userDoc._id.toString();
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
 
-        // Map messages to return only the caller's encrypted version
-        const sorted = contract.messages
+        const userId = req.userDoc._id.toString();
+        const messages = [...contract.messages]
             .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
-            .slice(-limit)
-            .map(msg => {
-                const isSender = msg.who._id.toString() === userId;
+            .map((message) => {
+                const senderId = message.who?._id?.toString()
+                    || message.who?.toString()
+                    || "";
+                const isSender = senderId === userId;
                 return {
-                    _id: msg._id,
-                    who: msg.who,
-                    content: isSender ? msg.contentForSender : msg.contentForRecipient,
-                    contentHash: msg.contentHash,
-                    createdAt: msg.createdAt
+                    _id: message._id,
+                    who: message.who,
+                    content: isSender
+                        ? message.contentForSender
+                        : message.contentForRecipient,
+                    contentHash: message.contentHash,
+                    createdAt: message.createdAt,
                 };
             });
 
-        res.json({ success: true, messages: sorted });
-    } catch (err) {
-        console.error(err);
+        res.json({ success: true, messages });
+    } catch (error) {
+        console.error("[messages] Failed to fetch messages:", error.message);
         res.status(500).json({ error: "Failed to fetch messages" });
     }
 };
-
