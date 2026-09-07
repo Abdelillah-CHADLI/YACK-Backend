@@ -3,6 +3,7 @@
 import express from "express";
 import auth from "../middleware/auth.js";
 import checkContractPermission from "../middleware/contractPermission.js";
+import requireActiveAccount from "../middleware/requireActiveAccount.js";
 
 import {
     createContract,
@@ -11,20 +12,25 @@ import {
     acceptContract,
     disputeContract,
     verifyContract,
-    getContracts
+    getContracts,
+    getTempContractStatus,
+    cancelTempContract
 } from "../controllers/contractController.js";
 
 const router = express.Router();
 
-router.post("/create", auth, createContract); // create a contract to be joined
-router.post("/join", auth, joinContract); // join a contract
-router.post("/sign", auth, signContract); // sign a contract
+router.post("/create", auth, requireActiveAccount, createContract);
+router.post("/join", auth, requireActiveAccount, joinContract);
+router.post("/sign", auth, requireActiveAccount, signContract);
 
+// Recovery endpoints for clients that miss or cannot receive push events.
+router.get("/temp/status", auth, requireActiveAccount, getTempContractStatus);
+router.delete("/temp/:tempID", auth, requireActiveAccount, cancelTempContract);
 
-router.post("/accept", auth, checkContractPermission, acceptContract);
-router.post("/dispute", auth,checkContractPermission , disputeContract);
-router.get("/verify",auth, checkContractPermission, verifyContract); // verify contract hash
-router.get("/list", auth, getContracts); // list all contracts
+router.post("/accept", auth, requireActiveAccount, checkContractPermission, acceptContract);
+router.post("/dispute", auth, requireActiveAccount, checkContractPermission, disputeContract);
+router.get("/verify", auth, requireActiveAccount, checkContractPermission, verifyContract);
+router.get("/list", auth, requireActiveAccount, getContracts);
 
 
 export default router;
