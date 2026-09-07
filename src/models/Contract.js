@@ -18,6 +18,14 @@ const EmbeddedMediaSchema = new mongoose.Schema({
 }, { _id: true });
 
 const ContractSchema = new mongoose.Schema({
+    // Idempotency key for the temporary-contract finalization step. A sparse
+    // unique index keeps legacy rows valid while ensuring one final contract
+    // can be created for each invitation.
+    sourceTempContract: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "TempContract"
+    },
+
     userA: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
     userB: { type: mongoose.Schema.Types.ObjectId, ref: "User", required: true },
 
@@ -48,11 +56,28 @@ const ContractSchema = new mongoose.Schema({
     disputedUserA:  { type: Boolean, default: false },
     disputedUserB:  { type: Boolean, default: false },
 
+    disputeReasonUserA: { type: String, default: "" },
+    disputeReasonUserB: { type: String, default: "" },
+    disputedAtUserA: { type: Date, default: null },
+    disputedAtUserB: { type: Date, default: null },
+
     hash: { type: String, default: "" },
 
     messages: [EmbeddedMessageSchema],
     media:    [EmbeddedMediaSchema]
 
 }, { timestamps: true });
+
+ContractSchema.index(
+    { sourceTempContract: 1 },
+    {
+        unique: true,
+        partialFilterExpression: {
+            sourceTempContract: { $type: "objectId" }
+        }
+    }
+);
+ContractSchema.index({ userA: 1, updatedAt: -1 });
+ContractSchema.index({ userB: 1, updatedAt: -1 });
 
 export default mongoose.model("Contract", ContractSchema);

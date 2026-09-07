@@ -22,6 +22,21 @@ const TempContractSchema = new mongoose.Schema({
 
     hash: { type: String, default: "" },
 
+    // A finalized temporary contract is retained until its TTL expires. This
+    // lets clients safely retry /sign and poll for completion after a lost
+    // response or push notification without creating duplicate contracts.
+    finalContract: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "Contract",
+        default: null
+    },
+    finalizedAt: { type: Date, default: null },
+
+    // Cancellation is intentionally a soft delete. The short-lived record is
+    // still removed by the TTL index, while both participants can observe a
+    // deterministic cancelled state in the meantime.
+    cancelledAt: { type: Date, default: null },
+
     expiresAt: {
         type: Date,
         default: () => new Date(Date.now() + 15 * 60 * 1000), // 15 minutes from creation
@@ -29,5 +44,8 @@ const TempContractSchema = new mongoose.Schema({
     }
 
 }, { timestamps: true });
+
+TempContractSchema.index({ userA: 1, updatedAt: -1 });
+TempContractSchema.index({ userB: 1, updatedAt: -1 });
 
 export default mongoose.model("TempContract", TempContractSchema);
