@@ -13,18 +13,22 @@ All endpoints are served from the Express app in `src/index.js`. Unless stated o
 ## User Routes (`/user`)
 | Method | Path | Description | Body Fields | Notes |
 | --- | --- | --- | --- | --- |
-| `POST` | `/finalize` | Complete account setup. | `firstName`, `lastName`, `publicKey`, `encryptedPrivateKey` (all required strings) | Requires verified Firebase email. Sets `isComplete: true`. |
-| `GET` | `/profile` | Get user profile with keys. | None | Returns `firstName`, `lastName`, `email`, `publicKey`, `encryptedPrivateKey`, `isComplete`. |
-| `PUT` | `/private-key` | Update encrypted private key. | `encryptedPrivateKey` (string, required) | For re-encrypting the same private key with a new password. |
-| `PUT` | `/profile` | Update profile info. | `firstName`, `lastName` (optional strings) | At least one field required. |
+| `POST` | `/finalize` | Complete account setup. | `firstName`, `lastName`, `publicKey`, `encryptedPrivateKey`, `salt`, `iv` (all required strings) | Requires verified Firebase email. Sets `isComplete: true`; same-key retries are idempotent. |
+| `GET` | `/profile` | Get user profile with keys. | None | Returns names, email, public/encrypted-private key material, `salt`, `iv`, `language`, and `isComplete`. |
+| `PUT` | `/private-key` | Update encrypted private key. | `encryptedPrivateKey`, `salt`, `iv` (required strings) | For re-encrypting the same private key with a new password. |
+| `PUT` | `/profile` | Update profile info. | `firstName`, `lastName`, `language` (`en`, `fr`, or `ar`) | At least one field required. |
+| `POST` | `/fcm-token/register` | Bind a notification device to the signed-in account. | `fcmToken` | A token is moved away from any previous account before registration. |
+| `POST` | `/fcm-token/unregister` | Remove a notification device before logout. | `fcmToken` | Idempotent when the token is not present. |
 
 ---
 ## Contract Routes (`/contracts`)
 | Method | Path | Description | Body Fields | Notes |
 | --- | --- | --- | --- | --- |
 | `POST` | `/create` | Start a temporary contract. | `hash` (optional), `titleUserA`, `descriptionUserA`, `priceUserA`, `detailsHash` (all required) | Encrypted fields for creator. Returns `tempID` for sharing. |
-| `POST` | `/join` | Join a temp contract as user B. | `tempID` (required), `hash` (if temp has hash), `titleUserB`, `descriptionUserB`, `priceUserB` (all required) | Returns userA info including `publicKey`. |
-| `POST` | `/sign` | Sign a temp contract. | `tempID` (string, required) | When both users sign, a `Contract` record is created with all encrypted fields. |
+| `POST` | `/join` | Join a temp contract as user B. | `tempID`, `detailsHash`, `titleUserB`, `descriptionUserB`, `priceUserB` (required); `hash` if the temp has one | The SHA-256 `detailsHash` must match the creator's terms. The reservation is atomic and same-user retries are idempotent. Returns userA info including `publicKey`. |
+| `POST` | `/sign` | Sign a temp contract. | `tempID` (string, required) | Signature retries are idempotent. When both users sign, exactly one `Contract` is materialized and `contractID` is returned. |
+| `GET` | `/temp/status` | Poll invitation/signature state. | Query: `tempID` | Returns `waiting_for_join`, `waiting_for_signatures`, `finalizing`, `completed`, `cancelled`, or `expired`. Before reservation, any authenticated active account may read safe metadata; afterward it is participant-only. No ciphertext is returned. |
+| `DELETE` | `/temp/:tempID` | Cancel a temporary invitation. | URL parameter: `tempID` | Creator-only and idempotent. Cancellation is retained as a short-lived tombstone until the invitation TTL removes it. |
 | `POST` | `/accept` | Mark a contract as accepted by the caller. | `contractId` (string, required) | Requires membership; completes contract when both accept. |
 | `POST` | `/dispute` | Flag a contract as disputed. | `contractId` (string, required), `reason` (string, optional) | Fails if contract already completed or disputed by caller. |
 | `GET` | `/verify` | Compare stored contract hash with a provided hash. | Query/body `contractId`, `hash` (string, required) | Response indicates `matches`. |
@@ -62,6 +66,7 @@ Content-Type: application/json
 {
   "tempID": "665dd...",
   "hash": "abc123",
+  "detailsHash": "<same sha256 digest from the reviewed QR terms>",
   "titleUserB": "<encrypted>",
   "descriptionUserB": "<encrypted>",
   "priceUserB": "<encrypted>"
@@ -76,7 +81,9 @@ Content-Type: application/json
 
 { "tempID": "665dd..." }
 ```
-Successful signing by both parties returns the final `contractID`.
+Successful signing by both parties returns the final `contractID`. While waiting,
+clients should also poll `GET /contracts/temp/status?tempID=665dd...`; push
+notifications are an optimization and are not required for completion.
 
 ---
 ## Message Routes (`/messages`)
@@ -115,10 +122,11 @@ Also guarded by `auth` + `checkContractPermission`.
 
 | Method | Path | Description | Payload |
 | --- | --- | --- | --- |
-| `POST` | `/send` | Store an uploaded media payload and attach metadata to the contract. | `{ "contractId": "...", "file": { "filename": "proof.png", "buffer": "<base64>" } }` |
+| `POST` | `/send` | Store an uploaded media payload and attach metadata to the contract. | `{ "contractId": "...", "file": { "filename": "proof.png", "buffer": "<base64>", "mimeType": "image/png" } }` |
 | `GET` | `/all` | Return all media entries for a contract. | Query: `contractId` |
+| `GET` | `/get` | Return one media entry and its usable URL. | Query: `contractId`, `mediaId` |
 
-`POST /media/send` uses `MediaHandler.send` to persist the binary payload (currently to `uploads/`). The response includes the stored record from `contract.media`; consumers can later fetch the binary using the saved path.
+`POST /media/send` accepts supported image/video formats up to 6 MB, uploads them to Cloudinary, and atomically appends the resulting URL and metadata to `contract.media`.
 
 ---
 ## Notifications

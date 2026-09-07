@@ -33,7 +33,7 @@ app.use("/user", userRoutes);
 // Global error handler
 app.use((err, req, res, next) => {
     console.error("Server Error:", err);
-    res.status(500).json({ error: "Internal server error", details: err.message });
+    res.status(500).json({ error: "Internal server error" });
 });
 
 // Start server

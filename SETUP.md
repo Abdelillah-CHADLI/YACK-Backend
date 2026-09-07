@@ -99,8 +99,9 @@ is missing.
 
 ## 5. Point the Flutter app at your backend
 
-The app reads the backend URL from a build-time define. Default is the old
-`https://yack.leapcell.app` — always pass your own.
+In development, the app automatically uses `http://10.0.2.2:3000` on an
+Android emulator and `http://127.0.0.1:3000` on desktop/web. A physical device
+or release build must receive the backend URL as a build-time define.
 
 **Android emulator / local backend:**
 ```bash
@@ -110,9 +111,22 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3000
 
 **Web / desktop / real device:** use your machine's LAN IP or the deployed URL.
 
+## 6. Verify the backend
+
+Run the deterministic test suite:
+
+```bash
+npm test
+```
+
+An optional live integration test exercises Firebase-authenticated account
+setup, contracts, messaging, Cloudinary media, and cancellation against a
+running local server. Set `RUN_LIVE_INTEGRATION=1` and
+`FIREBASE_WEB_API_KEY` before running `node --test test/liveApi.integration.test.js`.
+
 ---
 
-## 6. Deploy the backend (Leapcell)
+## 7. Deploy the backend (Leapcell)
 
 1. Push the **YACK-Backend** repo to GitHub.
 2. Create a Leapcell project pointing at that repo.
@@ -120,7 +134,7 @@ flutter run --dart-define=API_BASE_URL=http://10.0.2.2:3000
    (as real environment variables, no `.env` file needed). Leave `PORT=80`.
 4. Deploy. Your backend URL becomes `https://<subdomain>.leapcell.app`.
 
-## 7. Build the app against production
+## 8. Build the app against production
 
 ```bash
 flutter build apk --dart-define=API_BASE_URL=https://<your-subdomain>.leapcell.app
