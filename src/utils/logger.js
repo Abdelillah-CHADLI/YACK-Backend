@@ -4,7 +4,7 @@
 // ad-hoc "console.error([module] ...)" mix with one place that knows which
 // fields must never be written to stdout/stderr.
 
-function redact(value) {
+export function redact(value) {
     const SENSITIVE_KEYS = new Set([
         "authorization",
         "cookie",
