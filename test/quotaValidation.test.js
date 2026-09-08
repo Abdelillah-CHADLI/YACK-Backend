@@ -6,7 +6,16 @@ import {
     validateHash,
     timingSafeHexEqual,
 } from "../src/utils/validation.js";
-import { arrayBelowCap } from "../src/utils/quota.js";
+import {
+    arrayBelowCap,
+    MAX_MESSAGES_PER_CONTRACT,
+    MAX_MEDIA_PER_CONTRACT,
+    MAX_SUPPORT_MESSAGES_PER_THREAD,
+    MAX_SUPPORT_ATTACHMENTS_PER_THREAD,
+    MAX_SUPPORT_ATTACHMENT_BYTES,
+    MAX_OPEN_TEMP_CONTRACTS_PER_USER,
+    MAX_FINAL_CONTRACTS_PER_USER,
+} from "../src/utils/quota.js";
 import { parseLimit, parseOffset } from "../src/utils/pagination.js";
 import AdminAuditLog from "../src/models/AdminAuditLog.js";
 
@@ -56,6 +65,22 @@ test("arrayBelowCap builds a $expr predicate usable inside an update filter", ()
     const predicate = arrayBelowCap("messages", 5);
     assert.equal(predicate.$expr.$lt[0].$size.$ifNull[0], "$messages");
     assert.equal(predicate.$expr.$lt[1], 5);
+});
+
+test("arrayBelowCap treats a missing field as an empty array so caps apply before the first push", () => {
+    const predicate = arrayBelowCap("attachments", 25);
+    const nested = predicate.$expr.$lt[0].$size.$ifNull;
+    assert.deepEqual(nested, ["$attachments", []]);
+});
+
+test("per-account and per-resource caps stay at their documented values", () => {
+    assert.equal(MAX_MESSAGES_PER_CONTRACT, 500);
+    assert.equal(MAX_MEDIA_PER_CONTRACT, 100);
+    assert.equal(MAX_SUPPORT_MESSAGES_PER_THREAD, 250);
+    assert.equal(MAX_SUPPORT_ATTACHMENTS_PER_THREAD, 25);
+    assert.equal(MAX_SUPPORT_ATTACHMENT_BYTES, 6 * 1024 * 1024);
+    assert.equal(MAX_OPEN_TEMP_CONTRACTS_PER_USER, 50);
+    assert.equal(MAX_FINAL_CONTRACTS_PER_USER, 200);
 });
 
 test("parseLimit and parseOffset clamp page bounds", () => {

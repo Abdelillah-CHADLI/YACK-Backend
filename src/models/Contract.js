@@ -139,9 +139,12 @@ ContractSchema.index({ userA: 1, updatedAt: -1 });
 ContractSchema.index({ userB: 1, updatedAt: -1 });
 // F-46: the admin dispute/review queries (listDisputes, getDispute) and the
 // "recent contracts" feed (getContracts) were previously doing collection
-// scans filtered in memory.
+// scans filtered in memory. The open-dispute filter unions
+// { disputeState: "open" } with { status: "disputed", disputeState: { $ne:
+// "resolved" } }, so the compound below keeps both clauses index-backed.
 ContractSchema.index({ status: 1, updatedAt: -1 });
 ContractSchema.index({ disputeState: 1, updatedAt: -1 });
+ContractSchema.index({ status: 1, disputeState: 1 });
 ContractSchema.index({ createdAt: 1 });
 
 export default mongoose.model("Contract", ContractSchema);

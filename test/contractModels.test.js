@@ -65,3 +65,60 @@ test("contract status rejects unknown lifecycle values", async () => {
 
     await assert.rejects(contract.validate(), /status/);
 });
+
+const hasIndex = (indexes, fields) =>
+    indexes.some(
+        ([candidate]) =>
+            Object.keys(candidate).length === Object.keys(fields).length &&
+            Object.entries(fields).every(([key, value]) => candidate[key] === value)
+    );
+
+test("contract indexes cover the participant contract lists (F-46)", () => {
+    const contractIndexes = Contract.schema.indexes();
+
+    for (const fields of [
+        { userA: 1, updatedAt: -1 },
+        { userB: 1, updatedAt: -1 },
+    ]) {
+        assert.ok(
+            hasIndex(contractIndexes, fields),
+            `expected an index for ${JSON.stringify(fields)}`
+        );
+    }
+});
+
+test("contract indexes cover the admin dispute queries (F-46)", () => {
+    const contractIndexes = Contract.schema.indexes();
+
+    for (const fields of [
+        { status: 1, updatedAt: -1 },
+        { disputeState: 1, updatedAt: -1 },
+        { status: 1, disputeState: 1 },
+    ]) {
+        assert.ok(
+            hasIndex(contractIndexes, fields),
+            `expected an index for ${JSON.stringify(fields)}`
+        );
+    }
+});
+
+test("temporary contract indexes cover the open-invite quota and recovery lookups (F-46)", () => {
+    const tempIndexes = TempContract.schema.indexes();
+
+    for (const fields of [
+        { userA: 1, updatedAt: -1 },
+        { userB: 1, updatedAt: -1 },
+        { userA: 1, cancelledAt: 1, finalContract: 1, expiresAt: 1 },
+    ]) {
+        assert.ok(
+            hasIndex(tempIndexes, fields),
+            `expected an index for ${JSON.stringify(fields)}`
+        );
+    }
+
+    const recoveryIndex = tempIndexes.find(
+        ([fields]) => fields.finalContract === 1 && typeof fields.userA === "undefined"
+    );
+    assert.ok(recoveryIndex, "sparse finalContract index should exist");
+    assert.equal(recoveryIndex[1].sparse, true);
+});
