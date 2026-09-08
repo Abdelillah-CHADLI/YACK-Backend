@@ -16,10 +16,26 @@ const UserSchema = new mongoose.Schema({
 
     isComplete: { type: Boolean, default: false },  // true after finalize
 
+    // Admin/operator control flag (F-70): when true every authenticated
+    // request is rejected with 403 ACCOUNT_BLOCKED. Set via the database or a
+    // privileged script; there is no self-service endpoint for it.
+    blocked: { type: Boolean, default: false },
+
     fcmTokens: [{ type: String }],  // multi-device support
     
     language: { type: String, default: "en", enum: ["en", "fr", "ar"] }  // User's preferred language
 
 }, { timestamps: true });
+
+// A device token belongs to exactly one account at a time (F-03): the partial
+// unique index rejects any state where two users hold the same token. The
+// partial filter keeps users with no tokens out of the index entirely.
+UserSchema.index(
+    { fcmTokens: 1 },
+    { unique: true, partialFilterExpression: { "fcmTokens.0": { $exists: true } } }
+);
+
+// F-46: analytics and support lookups filter on the completion flag.
+UserSchema.index({ isComplete: 1 });
 
 export default mongoose.model("User", UserSchema);

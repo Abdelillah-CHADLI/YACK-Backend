@@ -77,3 +77,28 @@ test("admin middleware accepts a verified Firebase admin claim", () => {
     adminAuth(req, res, () => { called = true; });
     assert.equal(called, true);
 });
+
+test("admin middleware does not log administrator identities or allowlists", () => {
+    const previousEmails = process.env.ADMIN_EMAILS;
+    const previousLog = console.log;
+    const entries = [];
+    process.env.ADMIN_EMAILS = "private-admin@example.com";
+    console.log = (...args) => entries.push(args);
+
+    try {
+        const req = {
+            emailVerified: true,
+            firebaseUser: {
+                uid: "sensitive-firebase-uid",
+                email: "private-admin@example.com",
+            },
+        };
+        adminAuth(req, responseRecorder(), () => {});
+    } finally {
+        console.log = previousLog;
+        if (previousEmails === undefined) delete process.env.ADMIN_EMAILS;
+        else process.env.ADMIN_EMAILS = previousEmails;
+    }
+
+    assert.deepEqual(entries, []);
+});

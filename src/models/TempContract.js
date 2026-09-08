@@ -47,5 +47,9 @@ const TempContractSchema = new mongoose.Schema({
 
 TempContractSchema.index({ userA: 1, updatedAt: -1 });
 TempContractSchema.index({ userB: 1, updatedAt: -1 });
+// F-46: the open-invite quota (F-36) counts live invitations per creator, and
+// the status/recovery lookups key off the finalized contract id.
+TempContractSchema.index({ userA: 1, cancelledAt: 1, finalContract: 1, expiresAt: 1 });
+TempContractSchema.index({ finalContract: 1 }, { sparse: true });
 
 export default mongoose.model("TempContract", TempContractSchema);

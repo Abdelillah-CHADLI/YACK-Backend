@@ -7,30 +7,13 @@ import {
     MediaHandler,
     MediaValidationError,
 } from "../utils/mediaHandler.js";
-
-const MAX_CIPHERTEXT_LENGTH = 16_384;
-const MAX_REVIEW_MESSAGES = 250;
-const MAX_SUPPORT_ATTACHMENTS = 25;
-const HASH_PATTERN = /^[a-f0-9]{64}$/i;
-
-function requiredCiphertext(value, label) {
-    if (typeof value !== "string" || !value.trim()) {
-        throw new TypeError(`${label} is required`);
-    }
-    const normalized = value.trim();
-    if (normalized.length > MAX_CIPHERTEXT_LENGTH) {
-        throw new RangeError(`${label} is too large`);
-    }
-    return normalized;
-}
-
-function requiredHash(value) {
-    const hash = String(value || "").trim().toLowerCase();
-    if (!HASH_PATTERN.test(hash)) {
-        throw new TypeError("Content hash must be a SHA-256 hex digest");
-    }
-    return hash;
-}
+import { validateCiphertext, validateHash } from "../utils/validation.js";
+import {
+    arrayBelowCap,
+    MAX_SUPPORT_ATTACHMENTS_PER_THREAD,
+    MAX_SUPPORT_MESSAGES_PER_THREAD,
+} from "../utils/quota.js";
+import { logger } from "../utils/logger.js";
 
 function callerInDispute(req) {
     return req.contract.status === "disputed";
@@ -60,11 +43,24 @@ function supportAttachmentPayload(attachment) {
 }
 
 export async function ensureSupportThread(contractId, userId) {
-    return SupportThread.findOneAndUpdate(
-        { contract: contractId, user: userId },
-        { $set: { status: "open" } },
-        { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    try {
+        return await SupportThread.findOneAndUpdate(
+            { contract: contractId, user: userId },
+            { $set: { status: "open" } },
+            { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
+    } catch (error) {
+        // F-46/F-44 surface: two concurrent first visits can race an upsert on
+        // the unique (contract, user) index; retry once before failing.
+        if (error?.code === 11000) {
+            return SupportThread.findOneAndUpdate(
+                { contract: contractId, user: userId },
+                { $set: { status: "open" } },
+                { new: true, upsert: true, setDefaultsOnInsert: true }
+            );
+        }
+        throw error;
+    }
 }
 
 export const getReviewPublicKey = async (req, res) => {
@@ -89,28 +85,28 @@ export const grantReviewAccess = async (req, res) => {
     let grant;
     try {
         const messages = Array.isArray(req.body?.messages) ? req.body.messages : [];
-        if (messages.length > MAX_REVIEW_MESSAGES) {
+        if (messages.length > MAX_SUPPORT_MESSAGES_PER_THREAD) {
             return res.status(400).json({ error: "Too many review messages" });
         }
 
         grant = {
             grantedBy: req.userDoc._id,
-            titleForAdmin: requiredCiphertext(req.body?.titleForAdmin, "Encrypted title"),
-            descriptionForAdmin: requiredCiphertext(
+            titleForAdmin: validateCiphertext(req.body?.titleForAdmin, "Encrypted title"),
+            descriptionForAdmin: validateCiphertext(
                 req.body?.descriptionForAdmin,
                 "Encrypted description"
             ),
-            priceForAdmin: requiredCiphertext(req.body?.priceForAdmin, "Encrypted price"),
+            priceForAdmin: validateCiphertext(req.body?.priceForAdmin, "Encrypted price"),
             messages: messages.map((message) => ({
                 sourceMessageId: String(message?.sourceMessageId || "").slice(0, 128),
                 senderId: String(message?.senderId || "").slice(0, 128),
                 senderName: String(message?.senderName || "").trim().slice(0, 160),
-                contentForAdmin: requiredCiphertext(
+                contentForAdmin: validateCiphertext(
                     message?.contentForAdmin,
                     "Encrypted review message"
                 ),
                 contentHash: message?.contentHash
-                    ? requiredHash(message.contentHash)
+                    ? validateHash(message.contentHash, { label: "Content hash" })
                     : "",
                 createdAt: message?.createdAt ? new Date(message.createdAt) : new Date(),
             })),
@@ -152,7 +148,7 @@ export const grantReviewAccess = async (req, res) => {
         await ensureSupportThread(req.contract._id, req.userDoc._id);
         return res.json({ success: true, grantedAt: grant.grantedAt });
     } catch (error) {
-        console.error("[support] Failed to grant review access:", error.message);
+        logger.error("[support] Failed to grant review access:", { error: error.message });
         return res.status(500).json({ error: "Failed to grant review access" });
     }
 };
@@ -163,7 +159,20 @@ export const getUserSupportThread = async (req, res) => {
     }
 
     try {
-        const thread = await ensureSupportThread(req.contract._id, req.userDoc._id);
+        // A dispute always creates the thread at dispute time, so reads here are
+        // deliberately non-creating: a missing thread is a real 404, not a side
+        // effect (F-13).
+        const thread = await SupportThread.findOne({
+            contract: req.contract._id,
+            user: req.userDoc._id,
+        });
+        if (!thread) {
+            return res.status(404).json({
+                error: "No support conversation was found",
+                code: "SUPPORT_THREAD_NOT_FOUND",
+            });
+        }
+
         return res.json({
             success: true,
             thread: {
@@ -180,7 +189,7 @@ export const getUserSupportThread = async (req, res) => {
             },
         });
     } catch (error) {
-        console.error("[support] Failed to load support thread:", error.message);
+        logger.error("[support] Failed to load support thread:", { error: error.message });
         return res.status(500).json({ error: "Failed to load support conversation" });
     }
 };
@@ -196,9 +205,9 @@ export const sendUserSupportMessage = async (req, res) => {
             _id: new mongoose.Types.ObjectId(),
             senderType: "user",
             senderUser: req.userDoc._id,
-            contentForUser: requiredCiphertext(req.body?.contentForUser, "User ciphertext"),
-            contentForAdmin: requiredCiphertext(req.body?.contentForAdmin, "Admin ciphertext"),
-            contentHash: requiredHash(req.body?.contentHash),
+            contentForUser: validateCiphertext(req.body?.contentForUser, "User ciphertext"),
+            contentForAdmin: validateCiphertext(req.body?.contentForAdmin, "Admin ciphertext"),
+            contentHash: validateHash(req.body?.contentHash),
             createdAt: new Date(),
         };
     } catch (error) {
@@ -208,16 +217,31 @@ export const sendUserSupportMessage = async (req, res) => {
     try {
         await ensureSupportThread(req.contract._id, req.userDoc._id);
         const thread = await SupportThread.findOneAndUpdate(
-            { contract: req.contract._id, user: req.userDoc._id, status: "open" },
+            {
+                contract: req.contract._id,
+                user: req.userDoc._id,
+                status: "open",
+                ...arrayBelowCap("messages", MAX_SUPPORT_MESSAGES_PER_THREAD),
+            },
             { $push: { messages: entry } },
             { new: true, runValidators: true }
         );
         if (!thread) {
+            const existing = await SupportThread.findOne({
+                contract: req.contract._id,
+                user: req.userDoc._id,
+            });
+            if (existing && (existing.messages || []).length >= MAX_SUPPORT_MESSAGES_PER_THREAD) {
+                return res.status(400).json({
+                    error: "Message limit reached for this support conversation",
+                    code: "SUPPORT_MESSAGE_LIMIT",
+                });
+            }
             return res.status(409).json({ error: "This support conversation is closed" });
         }
         return res.status(201).json({ success: true, message: userMessagePayload(entry) });
     } catch (error) {
-        console.error("[support] Failed to send support message:", error.message);
+        logger.error("[support] Failed to send support message:", { error: error.message });
         return res.status(500).json({ error: "Failed to send support message" });
     }
 };
@@ -234,8 +258,11 @@ export const uploadSupportAttachment = async (req, res) => {
         if (!thread || thread.status !== "open") {
             return res.status(409).json({ error: "This support conversation is closed" });
         }
-        if ((thread.attachments || []).length >= MAX_SUPPORT_ATTACHMENTS) {
-            return res.status(400).json({ error: "Too many support attachments" });
+        if ((thread.attachments || []).length >= MAX_SUPPORT_ATTACHMENTS_PER_THREAD) {
+            return res.status(400).json({
+                error: "Too many support attachments",
+                code: "SUPPORT_ATTACHMENT_LIMIT",
+            });
         }
 
         stored = await MediaHandler.send(req.body?.file);
@@ -250,13 +277,30 @@ export const uploadSupportAttachment = async (req, res) => {
             createdAt: new Date(),
         };
 
+        // F-45: the pre-check above is only a UX shortcut; the actual guarantee
+        // is the atomic cap test inside the same update that appends.
         const updated = await SupportThread.findOneAndUpdate(
-            { contract: req.contract._id, user: req.userDoc._id, status: "open" },
+            {
+                contract: req.contract._id,
+                user: req.userDoc._id,
+                status: "open",
+                ...arrayBelowCap("attachments", MAX_SUPPORT_ATTACHMENTS_PER_THREAD),
+            },
             { $push: { attachments: entry } },
             { new: true, runValidators: true }
         );
         if (!updated) {
             await MediaHandler.delete(stored.path).catch(() => undefined);
+            const existing = await SupportThread.findOne({
+                contract: req.contract._id,
+                user: req.userDoc._id,
+            });
+            if (existing && (existing.attachments || []).length >= MAX_SUPPORT_ATTACHMENTS_PER_THREAD) {
+                return res.status(400).json({
+                    error: "Too many support attachments",
+                    code: "SUPPORT_ATTACHMENT_LIMIT",
+                });
+            }
             return res.status(409).json({ error: "This support conversation is closed" });
         }
         persisted = true;
@@ -268,7 +312,7 @@ export const uploadSupportAttachment = async (req, res) => {
         if (error instanceof MediaValidationError || error instanceof MediaConfigurationError) {
             return res.status(error.statusCode).json({ error: error.message });
         }
-        console.error("[support] Failed to upload support attachment:", error.message);
+        logger.error("[support] Failed to upload support attachment:", { error: error.message });
         return res.status(500).json({ error: "Failed to upload support attachment" });
     }
 };
@@ -279,7 +323,16 @@ export const getSupportAttachments = async (req, res) => {
     }
 
     try {
-        const thread = await ensureSupportThread(req.contract._id, req.userDoc._id);
+        const thread = await SupportThread.findOne({
+            contract: req.contract._id,
+            user: req.userDoc._id,
+        });
+        if (!thread) {
+            return res.status(404).json({
+                error: "No support conversation was found",
+                code: "SUPPORT_THREAD_NOT_FOUND",
+            });
+        }
         const attachments = [...(thread.attachments || [])].sort(
             (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
         );
@@ -288,7 +341,7 @@ export const getSupportAttachments = async (req, res) => {
             attachments: attachments.map(supportAttachmentPayload),
         });
     } catch (error) {
-        console.error("[support] Failed to load support attachments:", error.message);
+        logger.error("[support] Failed to load support attachments:", { error: error.message });
         return res.status(500).json({ error: "Failed to load support attachments" });
     }
 };
@@ -324,7 +377,7 @@ export const deleteSupportAttachment = async (req, res) => {
         }
         return res.json({ success: true });
     } catch (error) {
-        console.error("[support] Failed to delete support attachment:", error.message);
+        logger.error("[support] Failed to delete support attachment:", { error: error.message });
         return res.status(500).json({ error: "Failed to delete support attachment" });
     }
 };

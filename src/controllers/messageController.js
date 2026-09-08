@@ -5,6 +5,8 @@ import {
     parseMessageLimit,
     validateEncryptedMessage,
 } from "../utils/messageValidation.js";
+import { arrayBelowCap, MAX_MESSAGES_PER_CONTRACT } from "../utils/quota.js";
+import { logger } from "../utils/logger.js";
 
 export const sendMessage = async (req, res) => {
     let validated;
@@ -23,18 +25,34 @@ export const sendMessage = async (req, res) => {
             createdAt,
         };
 
-        // An atomic append avoids stale-document saves dropping concurrent messages.
+        // Atomic append (races cannot drop concurrent messages) plus an inline
+        // cap test: the push only applies while messages stays under the cap,
+        // so two simultaneous sends cannot both cross the limit (F-01/F-44).
         const updated = await Contract.findOneAndUpdate(
             {
                 _id: req.contract._id,
                 $or: [{ userA: req.userDoc._id }, { userB: req.userDoc._id }],
+                ...arrayBelowCap("messages", MAX_MESSAGES_PER_CONTRACT),
             },
             { $push: { messages: entry } },
             { new: true, runValidators: true, projection: { userA: 1, userB: 1 } }
         );
 
         if (!updated) {
-            return res.status(404).json({ error: "Contract not found" });
+            const existing = await Contract.findById(req.contract._id).select("messages");
+            if (!existing) {
+                return res.status(404).json({ error: "Contract not found" });
+            }
+            if ((existing.messages || []).length >= MAX_MESSAGES_PER_CONTRACT) {
+                return res.status(400).json({
+                    error: "Message limit reached for this contract",
+                    code: "MESSAGE_COUNT_LIMIT",
+                });
+            }
+            return res.status(409).json({
+                error: "Could not append message",
+                code: "MESSAGE_APPEND_CONFLICT",
+            });
         }
 
         res.status(201).json({
@@ -70,7 +88,7 @@ export const sendMessage = async (req, res) => {
             );
         }
     } catch (error) {
-        console.error("[messages] Failed to send message:", error.message);
+        logger.error("[messages] Failed to send message:", { error: error.message });
         if (!res.headersSent) {
             res.status(500).json({ error: "Failed to send message" });
         }
@@ -117,7 +135,7 @@ export const getAllMessages = async (req, res) => {
 
         res.json({ success: true, messages });
     } catch (error) {
-        console.error("[messages] Failed to fetch messages:", error.message);
+        logger.error("[messages] Failed to fetch messages:", { error: error.message });
         res.status(500).json({ error: "Failed to fetch messages" });
     }
 };

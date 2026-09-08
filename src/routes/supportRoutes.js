@@ -12,6 +12,7 @@ import {
 import auth from "../middleware/auth.js";
 import checkContractPermission from "../middleware/contractPermission.js";
 import requireActiveAccount from "../middleware/requireActiveAccount.js";
+import { userWriteLimiter } from "../middleware/rateLimiters.js";
 
 const router = express.Router();
 
@@ -26,6 +27,7 @@ router.get(
 router.post(
     "/review-access",
     auth,
+    userWriteLimiter,
     requireActiveAccount,
     checkContractPermission,
     grantReviewAccess
@@ -33,6 +35,7 @@ router.post(
 router.post(
     "/messages",
     auth,
+    userWriteLimiter,
     requireActiveAccount,
     checkContractPermission,
     sendUserSupportMessage
@@ -40,6 +43,7 @@ router.post(
 router.post(
     "/attachments",
     auth,
+    userWriteLimiter,
     requireActiveAccount,
     checkContractPermission,
     uploadSupportAttachment
@@ -54,6 +58,7 @@ router.get(
 router.delete(
     "/attachments/:mediaId",
     auth,
+    userWriteLimiter,
     requireActiveAccount,
     checkContractPermission,
     deleteSupportAttachment

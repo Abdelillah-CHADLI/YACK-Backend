@@ -5,24 +5,20 @@ import TempContract from "../models/TempContract.js";
 import User from "../models/User.js";
 import { sendNotification } from "../utils/sendNotification.js";
 import { ensureSupportThread } from "./supportController.js";
+import {
+    validateCiphertext,
+    validateHash,
+    timingSafeHexEqual,
+} from "../utils/validation.js";
+import { parseLimit, parseOffset } from "../utils/pagination.js";
+import {
+    MAX_FINAL_CONTRACTS_PER_USER,
+    MAX_OPEN_TEMP_CONTRACTS_PER_USER,
+} from "../utils/quota.js";
+import { logger } from "../utils/logger.js";
 
-const DETAILS_HASH_PATTERN = /^[a-f0-9]{64}$/i;
-const MAX_ENCRYPTED_FIELD_LENGTH = 16_384;
 const MAX_JOIN_HASH_LENGTH = 512;
 const MAX_DISPUTE_REASON_LENGTH = 2_000;
-
-function requiredString(value, label, { maxLength = MAX_ENCRYPTED_FIELD_LENGTH } = {}) {
-    if (typeof value !== "string" || !value.trim()) {
-        return { error: `${label} required` };
-    }
-
-    const normalized = value.trim();
-    if (normalized.length > maxLength) {
-        return { error: `${label} is too large` };
-    }
-
-    return { value: normalized };
-}
 
 function isExpired(temp, now = new Date()) {
     return Boolean(temp.expiresAt && new Date(temp.expiresAt) <= now);
@@ -57,8 +53,20 @@ function tempStatus(temp) {
     return "waiting_for_signatures";
 }
 
-function tempStatusPayload(temp, finalContractId = null) {
+/**
+ * Build the temp-contract status payload.
+ *
+ * F-39: before a second participant has been reserved, participant names are
+ * PII no outsider needs, so they are dropped unless the caller already is one
+ * of the parties. The detailsHash is intentionally kept even pre-join: the
+ * mobile scan flow cross-checks it against the value transported by the QR
+ * code, and the QR already carries it, so hiding it adds no secrecy while
+ * breaking cold join (verified against scan_contract.dart).
+ */
+function tempStatusPayload(temp, finalContractId = null, callerId = null) {
     const contractID = finalContractId || temp.finalContract || null;
+    const callerRole = callerId ? participantRole(temp, callerId) : null;
+    const discloseNames = Boolean(temp.userB) || callerRole !== null;
     return {
         success: true,
         status: contractID ? "completed" : tempStatus(temp),
@@ -70,8 +78,8 @@ function tempStatusPayload(temp, finalContractId = null) {
         userBSign: Boolean(temp.userBSign),
         userASigned: Boolean(temp.userASign),
         userBSigned: Boolean(temp.userBSign),
-        userA: participantSummary(temp.userA),
-        userB: participantSummary(temp.userB),
+        userA: discloseNames ? participantSummary(temp.userA) : null,
+        userB: discloseNames ? participantSummary(temp.userB) : null,
         detailsHash: temp.detailsHash || "",
         expiresAt: temp.expiresAt,
         updatedAt: temp.updatedAt
@@ -84,7 +92,7 @@ async function notifyBestEffort(...args) {
     } catch (error) {
         // A push-provider outage must never turn a committed contract mutation
         // into a 500 response. Clients can recover through status/list polling.
-        console.error("[ContractNotification] Delivery failed:", error.message);
+        logger.error("[ContractNotification] Delivery failed:", { error: error.message });
     }
 }
 
@@ -95,12 +103,14 @@ async function findFinalContractForTemp(tempId) {
 }
 
 async function finalizeTempContract(tempId) {
+    // F-13: finalization is only legal inside the invitation's lifetime.
     const temp = await TempContract.findOne({
         _id: tempId,
         userB: { $ne: null },
         userASign: true,
         userBSign: true,
-        cancelledAt: null
+        cancelledAt: null,
+        expiresAt: { $gt: new Date() }
     });
 
     if (!temp) return null;
@@ -161,48 +171,61 @@ async function finalizeTempContract(tempId) {
     return finalContract;
 }
 
+async function finalContractCountForUser(userId) {
+    return Contract.countDocuments({
+        $or: [{ userA: userId }, { userB: userId }]
+    });
+}
+
 /** Create a temporary contract invitation. */
 export const createContract = async (req, res) => {
+    logger.info("[contracts] create temp invitation started");
     try {
-        const title = requiredString(req.body?.titleUserA, "Encrypted title");
-        const description = requiredString(
+        // F-36: one account may hold a bounded number of live invitations.
+        const openCount = await TempContract.countDocuments({
+            userA: req.userDoc._id,
+            cancelledAt: null,
+            finalContract: null,
+            expiresAt: { $gt: new Date() }
+        });
+        if (openCount >= MAX_OPEN_TEMP_CONTRACTS_PER_USER) {
+            return res.status(429).json({
+                error: "Open contract invitations limit reached",
+                code: "TEMP_CONTRACT_QUOTA_EXCEEDED"
+            });
+        }
+
+        // F-41: the creator's contract fields are expected to be canonical
+        // Base64 ciphertext, like every other encrypted field on the server.
+        const title = validateCiphertext(req.body?.titleUserA, "Encrypted title");
+        const description = validateCiphertext(
             req.body?.descriptionUserA,
             "Encrypted description"
         );
-        const price = requiredString(req.body?.priceUserA, "Encrypted price");
-        const detailsHash = requiredString(req.body?.detailsHash, "Details hash", {
-            maxLength: 64
+        const price = validateCiphertext(req.body?.priceUserA, "Encrypted price");
+        const detailsHash = validateHash(req.body?.detailsHash, {
+            label: "Details hash"
         });
-
-        for (const field of [title, description, price, detailsHash]) {
-            if (field.error) return res.status(400).json({ error: field.error });
-        }
-
-        if (!DETAILS_HASH_PATTERN.test(detailsHash.value)) {
-            return res.status(400).json({
-                error: "Details hash must be a SHA-256 hex digest",
-                code: "INVALID_DETAILS_HASH"
-            });
-        }
 
         let hash = "";
         if (req.body?.hash != null) {
-            const parsedHash = requiredString(req.body.hash, "Contract hash", {
-                maxLength: MAX_JOIN_HASH_LENGTH
-            });
-            if (parsedHash.error) {
-                return res.status(400).json({ error: parsedHash.error });
+            const parsedHash = String(req.body.hash || "").trim();
+            if (!parsedHash) {
+                return res.status(400).json({ error: "Contract hash is required" });
             }
-            hash = parsedHash.value;
+            if (parsedHash.length > MAX_JOIN_HASH_LENGTH) {
+                return res.status(400).json({ error: "Contract hash is too large" });
+            }
+            hash = parsedHash;
         }
 
         const temp = await TempContract.create({
             userA: req.userDoc._id,
             hash,
-            titleUserA: title.value,
-            descriptionUserA: description.value,
-            priceUserA: price.value,
-            detailsHash: detailsHash.value.toLowerCase()
+            titleUserA: title,
+            descriptionUserA: description,
+            priceUserA: price,
+            detailsHash
         });
 
         const payload = tempStatusPayload(temp);
@@ -212,41 +235,30 @@ export const createContract = async (req, res) => {
             tempID: temp._id
         });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to create temp contract:", { error: error.message });
         return res.status(500).json({ error: "Failed to create temp contract" });
     }
 };
 
 /** Atomically reserve a temporary contract for user B. */
 export const joinContract = async (req, res) => {
+    logger.info("[contracts] join temp invitation started");
     try {
         const { tempID } = req.body || {};
         if (!mongoose.Types.ObjectId.isValid(tempID)) {
             return res.status(400).json({ error: "Invalid contract ID" });
         }
 
-        const title = requiredString(req.body?.titleUserB, "Encrypted title for userB");
-        const description = requiredString(
+        // F-41: same ciphertext shape rule as contract creation.
+        const title = validateCiphertext(req.body?.titleUserB, "Encrypted title for userB");
+        const description = validateCiphertext(
             req.body?.descriptionUserB,
             "Encrypted description for userB"
         );
-        const price = requiredString(req.body?.priceUserB, "Encrypted price for userB");
-        const suppliedDetailsHash = requiredString(
-            req.body?.detailsHash,
-            "Details hash",
-            { maxLength: 64 }
-        );
-
-        for (const field of [title, description, price, suppliedDetailsHash]) {
-            if (field.error) return res.status(400).json({ error: field.error });
-        }
-
-        if (!DETAILS_HASH_PATTERN.test(suppliedDetailsHash.value)) {
-            return res.status(400).json({
-                error: "Details hash must be a SHA-256 hex digest",
-                code: "INVALID_DETAILS_HASH"
-            });
-        }
+        const price = validateCiphertext(req.body?.priceUserB, "Encrypted price for userB");
+        const suppliedDetailsHash = validateHash(req.body?.detailsHash, {
+            label: "Details hash"
+        });
 
         const existing = await TempContract.findById(tempID);
         if (!existing) {
@@ -278,13 +290,13 @@ export const joinContract = async (req, res) => {
             });
         }
         const storedDetailsHash = existing.detailsHash?.toLowerCase();
-        if (!storedDetailsHash || !DETAILS_HASH_PATTERN.test(storedDetailsHash)) {
+        if (!storedDetailsHash || !/^[a-f0-9]{64}$/i.test(storedDetailsHash)) {
             return res.status(409).json({
                 error: "The creator's contract details cannot be verified",
                 code: "DETAILS_HASH_UNAVAILABLE"
             });
         }
-        if (storedDetailsHash !== suppliedDetailsHash.value.toLowerCase()) {
+        if (storedDetailsHash !== suppliedDetailsHash.toLowerCase()) {
             return res.status(409).json({
                 error: "Contract details do not match the creator's terms",
                 code: "DETAILS_HASH_MISMATCH"
@@ -296,7 +308,7 @@ export const joinContract = async (req, res) => {
             if (typeof suppliedJoinHash !== "string" || !suppliedJoinHash) {
                 return res.status(400).json({ error: "Contract hash required" });
             }
-            if (existing.hash !== suppliedJoinHash) {
+            if (!timingSafeHexEqual(String(existing.hash).trim().toLowerCase(), suppliedJoinHash.trim().toLowerCase())) {
                 return res.status(403).json({
                     error: "Contract hash mismatch",
                     code: "JOIN_HASH_MISMATCH"
@@ -314,7 +326,16 @@ export const joinContract = async (req, res) => {
             });
         }
 
+        // F-36: bounded account growth even when invitations are finalized.
         const callerId = req.userDoc._id;
+        const callerFinalCount = await finalContractCountForUser(callerId);
+        if (callerFinalCount >= MAX_FINAL_CONTRACTS_PER_USER) {
+            return res.status(429).json({
+                error: "Contract limit reached for this account",
+                code: "FINAL_CONTRACT_QUOTA_EXCEEDED"
+            });
+        }
+
         let joinedNow = false;
         let temp;
 
@@ -338,9 +359,9 @@ export const joinContract = async (req, res) => {
                 {
                     $set: {
                         userB: callerId,
-                        titleUserB: title.value,
-                        descriptionUserB: description.value,
-                        priceUserB: price.value
+                        titleUserB: title,
+                        descriptionUserB: description,
+                        priceUserB: price
                     }
                 },
                 { new: true, runValidators: true }
@@ -391,13 +412,14 @@ export const joinContract = async (req, res) => {
             userAPublicKey: userA.publicKey
         });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to join contract:", { error: error.message });
         return res.status(500).json({ error: "Failed to join contract" });
     }
 };
 
 /** Sign a temporary contract and idempotently create its final contract. */
 export const signContract = async (req, res) => {
+    logger.info("[contracts] sign temp invitation started");
     try {
         const { tempID } = req.body || {};
         if (!mongoose.Types.ObjectId.isValid(tempID)) {
@@ -498,6 +520,18 @@ export const signContract = async (req, res) => {
 
         let finalContract = null;
         if (temp.userASign && temp.userBSign) {
+            // F-36: final materialization is also bounded, so an account cannot
+            // grow past the cap through the poll/recovery paths either.
+            const otherFinalCount = await finalContractCountForUser(
+                role === "userA" ? temp.userB : temp.userA
+            );
+            if (otherFinalCount >= MAX_FINAL_CONTRACTS_PER_USER) {
+                return res.status(429).json({
+                    error: "Contract limit reached for this account",
+                    code: "FINAL_CONTRACT_QUOTA_EXCEEDED"
+                });
+            }
+
             finalContract = await finalizeTempContract(temp._id);
             if (!finalContract) {
                 return res.status(409).json({
@@ -536,13 +570,14 @@ export const signContract = async (req, res) => {
             completed: Boolean(finalContract)
         });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to sign contract:", { error: error.message });
         return res.status(500).json({ error: "Failed to sign contract" });
     }
 };
 
 /** Return temporary-contract state, without exposing encrypted details. */
 export const getTempContractStatus = async (req, res) => {
+    logger.info("[contracts] temp status requested");
     try {
         const tempID = req.query?.tempID || req.query?.tempId;
         if (!mongoose.Types.ObjectId.isValid(tempID)) {
@@ -567,7 +602,7 @@ export const getTempContractStatus = async (req, res) => {
                 finalContractId = finalContract?._id || null;
             }
 
-            return res.json(tempStatusPayload(temp, finalContractId));
+            return res.json(tempStatusPayload(temp, finalContractId, req.userDoc._id));
         }
 
         const finalContract = await findFinalContractForTemp(tempID);
@@ -587,7 +622,7 @@ export const getTempContractStatus = async (req, res) => {
 
         return res.status(404).json({ error: "Temp contract not found" });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to fetch contract status:", { error: error.message });
         return res.status(500).json({ error: "Failed to fetch contract status" });
     }
 };
@@ -676,7 +711,7 @@ export const cancelTempContract = async (req, res) => {
             tempID: cancelled._id
         });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to cancel contract:", { error: error.message });
         return res.status(500).json({ error: "Failed to cancel contract" });
     }
 };
@@ -786,7 +821,7 @@ export const acceptContract = async (req, res) => {
             agreedUserB: updated.agreedUserB
         });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to accept contract:", { error: error.message });
         return res.status(500).json({ error: "Failed to accept contract" });
     }
 };
@@ -797,6 +832,15 @@ export const disputeContract = async (req, res) => {
         const contract = req.contract;
         if (!contract) {
             return res.status(404).json({ error: "Contract not found" });
+        }
+
+        // F-11: a resolved dispute is terminal; the review note stays the one
+        // authoritative record, so a party cannot reopen or mutate it.
+        if (contract.disputeState === "resolved") {
+            return res.status(409).json({
+                error: "This dispute has already been resolved",
+                code: "DISPUTE_RESOLVED"
+            });
         }
 
         if (req.body?.reason != null && typeof req.body.reason !== "string") {
@@ -861,15 +905,16 @@ export const disputeContract = async (req, res) => {
 
         const otherUser = isUserA ? updated.userB : updated.userA;
         void ensureSupportThread(updated._id, req.userDoc._id).catch((error) => {
-            console.error("[support] Failed to open dispute thread:", error.message);
+            logger.error("[support] Failed to open dispute thread:", { error: error.message });
         });
         void notifyBestEffort(
             otherUser,
             "contract_disputed",
             "",
             {
+                // F-12: the plaintext dispute reason no longer travels in the
+                // push data payload (notifications are not encrypted).
                 type: "contractDispute",
-                reason,
                 userId: req.userDoc._id.toString(),
                 username: req.userDoc.firstName || "",
                 contractId: updated._id.toString()
@@ -889,7 +934,7 @@ export const disputeContract = async (req, res) => {
             disputeReason: reason
         });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to dispute contract:", { error: error.message });
         return res.status(500).json({ error: "Failed to dispute contract" });
     }
 };
@@ -903,36 +948,63 @@ export const verifyContract = async (req, res) => {
         }
 
         const providedHash = req.body?.hash || req.query?.hash || req.params?.hash;
-        if (typeof providedHash !== "string" || !providedHash) {
+        if (typeof providedHash !== "string" || !providedHash || !providedHash.trim()) {
             return res.status(400).json({ error: "Hash is required" });
         }
 
-        const storedHash = contract.hash || contract.detailsHash;
+        // F-40: normalize both sides the same way the object-store did at
+        // creation (trim, collapse whitespace, lowercase), cap the length, and
+        // compare digests in constant time instead of a raw === compare.
+        const normalizedProvided = String(providedHash)
+            .trim()
+            .replace(/\s+/g, " ")
+            .toLowerCase();
+        if (normalizedProvided.length > 512) {
+            return res.status(400).json({ error: "Hash is too large" });
+        }
+
+        const storedHash = String(contract.hash || contract.detailsHash || "")
+            .trim()
+            .replace(/\s+/g, " ")
+            .toLowerCase();
         if (!storedHash) {
             return res.status(404).json({ error: "No hash stored for this contract" });
         }
 
         return res.json({
             success: true,
-            matches: storedHash === providedHash,
+            matches: timingSafeHexEqual(storedHash, normalizedProvided),
             hashType: contract.hash ? "contract" : "details"
         });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to verify contract:", { error: error.message });
         return res.status(500).json({ error: "Failed to verify contract" });
     }
 };
 
 /** List caller-visible contracts without leaking the other encrypted envelope. */
 export const getContracts = async (req, res) => {
+    logger.info("[contracts] list requested");
     try {
         const userId = req.userDoc._id.toString();
-        const contracts = await Contract.find({
+
+        // F-14: bounded pages instead of an unbounded embedded-array scan; the
+        // mobile client walks pages until hasMore is false.
+        const limit = parseLimit(req.query.limit, { defaultValue: 50, max: 100 });
+        const offset = parseOffset(req.query.offset, { defaultValue: 0 });
+
+        const query = {
             $or: [{ userA: req.userDoc._id }, { userB: req.userDoc._id }]
-        })
-            .populate("userA", "firstName lastName publicKey")
-            .populate("userB", "firstName lastName publicKey")
-            .sort({ updatedAt: -1 });
+        };
+        const [total, contracts] = await Promise.all([
+            Contract.countDocuments(query),
+            Contract.find(query)
+                .populate("userA", "firstName lastName publicKey")
+                .populate("userB", "firstName lastName publicKey")
+                .sort({ updatedAt: -1 })
+                .skip(offset)
+                .limit(limit)
+        ]);
 
         const mappedContracts = contracts.flatMap((contract) => {
             const userAId = contract.userA?._id?.toString();
@@ -978,9 +1050,18 @@ export const getContracts = async (req, res) => {
             }];
         });
 
-        return res.json({ success: true, contracts: mappedContracts });
+        return res.json({
+            success: true,
+            contracts: mappedContracts,
+            pagination: {
+                total,
+                limit,
+                offset,
+                hasMore: offset + mappedContracts.length < total
+            }
+        });
     } catch (error) {
-        console.error(error);
+        logger.error("[contracts] Failed to fetch contracts:", { error: error.message });
         return res.status(500).json({ error: "Failed to fetch contracts" });
     }
 };

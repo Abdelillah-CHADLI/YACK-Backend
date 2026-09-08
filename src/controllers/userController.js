@@ -1,5 +1,9 @@
 import User from "../models/User.js";
 import { normalizeFcmToken } from "../utils/fcmToken.js";
+import {
+    MAX_FCM_TOKENS_PER_USER,
+    planFcmTokenBind,
+} from "../utils/fcmRegistration.js";
 
 const MAX_NAME_LENGTH = 80;
 const MAX_KEY_LENGTH = 32 * 1024;
@@ -212,28 +216,61 @@ export const updateProfile = async (req, res) => {
     }
 };
 
-/** Explicitly bind an FCM device token to the current account. */
-export const registerFcmToken = async (req, res) => {
-    const token = normalizeFcmToken(req.body?.fcmToken || req.headers["x-fcm-token"]);
-    if (!token) {
-        return res.status(400).json({ error: "A valid FCM token is required" });
-    }
+/**
+ * Explicitly bind an FCM device token to the current account (F-03).
+ *
+ * Device tokens are opaque strings with no intrinsic ownership, so this is the
+ * ONLY place a token can be bound: the old implicit registration on any request
+ * carrying the token is gone. The remove-from-others + add-to-self is performed
+ * as a single atomic database write, and the number of tokens per account is
+ * capped (oldest evicted) so one account can never amass unlimited devices.
+ *
+ * Full possession attestation (a Firebase-verified device nonce) is deferred to
+ * platform SDK work; the atomic move + explicit endpoint + cap close the
+ * original hijack and non-atomicity vectors.
+ */
+export function createRegisterFcmTokenHandler({ UserModel }) {
+    return async function registerFcmToken(req, res) {
+        const token = normalizeFcmToken(req.body?.fcmToken || req.headers["x-fcm-token"]);
+        if (!token) {
+            return res.status(400).json({ error: "A valid FCM token is required" });
+        }
 
-    try {
-        await User.updateMany(
-            { _id: { $ne: req.userDoc._id }, fcmTokens: token },
-            { $pull: { fcmTokens: token } }
-        );
-        await User.updateOne(
-            { _id: req.userDoc._id },
-            { $addToSet: { fcmTokens: token } }
-        );
-        return res.json({ success: true });
-    } catch (error) {
-        console.error("[user] Failed to register FCM token:", error.message);
-        return res.status(500).json({ error: "Failed to register notification device" });
-    }
-};
+        try {
+            const current = await UserModel.findById(req.userDoc._id).select("fcmTokens");
+            if (!current) {
+                return res.status(404).json({ error: "User not found" });
+            }
+
+            const plan = planFcmTokenBind({
+                userId: req.userDoc._id,
+                ownedTokens: current.fcmTokens,
+                token,
+            });
+
+            if (plan.decision === "already-bound") {
+                return res.json({ success: true });
+            }
+
+            await UserModel.updateMany(plan.filter, plan.pipeline);
+
+            return res.json({ success: true });
+        } catch (error) {
+            if (error?.code === 11000) {
+                // A concurrent registration of the same token won the race; the
+                // client can simply retry the register call.
+                return res.status(409).json({
+                    error: "Notification device is being registered, please retry",
+                    code: "FCM_TOKEN_CONFLICT",
+                });
+            }
+            console.error("[user] Failed to register FCM token:", error.message);
+            return res.status(500).json({ error: "Failed to register notification device" });
+        }
+    };
+}
+
+export const registerFcmToken = createRegisterFcmTokenHandler({ UserModel: User });
 
 /** Remove this device's token before local sign-out. */
 export const unregisterFcmToken = async (req, res) => {

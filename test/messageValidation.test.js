@@ -30,7 +30,7 @@ test("encrypted message validation rejects malformed ciphertext and digest", () 
             contentForRecipient: encrypted,
             contentHash: digest,
         }),
-        /valid Base64/
+        /valid canonical Base64/
     );
     assert.throws(
         () => validateEncryptedMessage({

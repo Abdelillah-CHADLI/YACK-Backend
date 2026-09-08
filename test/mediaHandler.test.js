@@ -9,14 +9,36 @@ import {
     validateMediaPayload,
 } from "../src/utils/mediaHandler.js";
 
+const JPEG_BYTES = Buffer.from([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46]);
+const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
 test("media validation accepts the Flutter image-picker payload", () => {
     const payload = validateMediaPayload({
         filename: "camera-photo.JPG",
-        buffer: Buffer.from("image bytes").toString("base64"),
+        buffer: JPEG_BYTES.toString("base64"),
     });
 
     assert.equal(payload.filename, "camera-photo.JPG");
     assert.equal(payload.mimeType, "image/jpeg");
+});
+
+test("media validation rejects content that does not match its declared type", () => {
+    assert.throws(
+        () => validateMediaPayload({
+            filename: "proof.png",
+            buffer: JPEG_BYTES.toString("base64"),
+        }),
+        (error) =>
+            error instanceof MediaValidationError &&
+            /does not match/.test(error.message)
+    );
+    assert.throws(
+        () => validateMediaPayload({
+            filename: "notes.txt",
+            buffer: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 0, 0, 0]).toString("base64"),
+        }),
+        MediaValidationError
+    );
 });
 
 test("media validation sanitizes paths and rejects malformed Base64", () => {
@@ -61,7 +83,7 @@ test("media upload produces the response shape consumed by Flutter", async () =>
     const result = await MediaHandler.send(
         {
             filename: "proof.png",
-            buffer: Buffer.from("image bytes").toString("base64"),
+            buffer: Buffer.concat([PNG_MAGIC, Buffer.from("image bytes")]).toString("base64"),
         },
         fakeCloudinary
     );

@@ -77,14 +77,56 @@ FIREBASE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\nMIIE...\n-----END PRIVATE KEY
 CLOUDINARY_CLOUD_NAME=<your-cloud-name>
 CLOUDINARY_API_KEY=<your-api-key>
 CLOUDINARY_API_SECRET=<your-api-secret>
+ADMIN_EMAILS=admin@your-domain.com          # commas for several admins
+ADMIN_REVIEW_PUBLIC_KEY=<base64 yack RSA public key>
+CORS_ORIGINS=https://<your-admin-dashboard-url>   # commas for several origins
 ```
 
 > `FIREBASE_PRIVATE_KEY` must keep the literal `\n` (escaped newlines) — copy the value
-> directly from the downloaded `serviceAccountKey.json`'s `private_key` field.
+> directly from the downloaded service-account JSON's `private_key` field.
 >
-> Alternative to the three `FIREBASE_*` vars: download your service account JSON, save it as
-> `src/config/serviceAccountKey.json` (never commit it), and the backend will pick it up
-> automatically.
+> Alternative to the three `FIREBASE_*` vars: set `GOOGLE_APPLICATION_CREDENTIALS`
+> to the path of a service-account JSON file. There is **no** implicit
+> `src/config/serviceAccountKey.json` lookup anymore; only the env vars or that
+> explicit path are ever used.
+
+### Production behavior (F-08, F-68, F-69)
+
+- Set `NODE_ENV=production` on your host (Leapcell/Render). The server then
+  **refuses to start** if any required variable is missing — a misconfigured
+  deployment fails loudly instead of degrading (empty admin allowlist,
+  unshareable Cloudinary config, missing review key).
+- `CORS_ORIGINS` is required in production and **fail-closed**: any browser
+  origin that is not listed gets no CORS headers. Native mobile clients are
+  unaffected (they send no `Origin` header). If the deployed admin dashboard
+  stops working after an upgrade, the backend host's `CORS_ORIGINS` almost
+  certainly does not include the dashboard origin.
+- A Cloudinary `api.ping()` connectivity check runs at boot. A failure is
+  logged and non-fatal.
+
+### Rate limiting, FCM registration and verified-email gates (F-02, F-03, F-35)
+
+- **Rate limits:** `express-rate-limit` is layered in
+  `src/middleware/rateLimiters.js`. A global limiter (600 requests / 15 min per
+  IP, applied before body parsing, skipping only `GET /` and `/health`) protects
+  the whole API; per-operation ceilings apply to account setup, contract writes,
+  media upload, message send and dispute creation. Clients receive
+  `429 RATE_LIMITED` on breach. The server sets `trust proxy = 1` (
+  **`trust proxy` must stay accurate** — e.g. 1 hop on Leapcell/Render; if your
+  provider adds load balancers, update this so clients are keyed by their real
+  IP). Plan for a shared store (Redis) if the backend is ever scaled horizontally;
+  the default in-memory store is per-process.
+- **FCM tokens are explicit.** Apps register/unregister device push tokens only
+  through `POST /user/fcm-token/register` and `POST /user/fcm-token/unregister`.
+  Each account may hold up to **5 tokens** (oldest evicted first), and a token is
+  atomically moved from any other account in the same write (single owner).
+  Replaying a token that belongs to another account returns `409
+  FCM_TOKEN_CONFLICT`, handled by a client retry.
+- **Verified-email gate.** The account-finalize, profile and private-key writes
+  return `403 EMAIL_NOT_VERIFIED` until the Firebase email is verified (the
+  backend re-checks `email_verified` live per request). FCM token
+  register/unregister are deliberately exempt so push works right after
+  verification.
 
 Run locally:
 
@@ -92,7 +134,7 @@ Run locally:
 npm run dev     # or: npm start
 ```
 
-The server loads `.env` automatically and fails fast with a clear message if any credential
+The server loads `.env` automatically and fails fast with a clear message if a credential
 is missing.
 
 ---
@@ -144,10 +186,19 @@ flutter build apk --dart-define=API_BASE_URL=https://<your-subdomain>.leapcell.a
 
 ## Security notes
 
-- **Never commit** `.env` or `serviceAccountKey.json` — both are gitignored.
+- **Never commit** `.env` or a service-account JSON — both are gitignored.
 - The original Firebase service-account key was previously committed to git history.
   Ask the original author to **rotate/revoke** it in the old project.
 - Cloudinary/Firebase/Mongo credentials should only ever live in `.env` / the host env.
+- Since the CORS hardening (F-68), production requires `CORS_ORIGINS`; the admin
+  dashboard host must be listed there or browser access is refused.
+- Blocked user accounts (`blocked: true` set via the database) are rejected with
+  `403 ACCOUNT_BLOCKED` without exposing why (F-70). There is no self-service
+  endpoint to set or clear the flag.
+- Requiring the **MongoDB 4.2+ aggregation features**: the FCM registration
+  atomic pipeline uses `$set`/`$cond`/`$ifNull`/`$filter` (Atlas M0 is fine).
+- The `trust proxy` setting (see rate limiting above) must be kept in sync with
+  your hosting topology, or IP based limits become ineffective or over-strict.
 
 ---
 
@@ -160,6 +211,10 @@ flutter build apk --dart-define=API_BASE_URL=https://<your-subdomain>.leapcell.a
 | `FIREBASE_PROJECT_ID` | yes (or service JSON) | From Firebase settings |
 | `FIREBASE_CLIENT_EMAIL` | yes (or service JSON) | Firebase service account |
 | `FIREBASE_PRIVATE_KEY` | yes (or service JSON) | Keep escaped `\n` |
-| `CLOUDINARY_CLOUD_NAME` | yes | Cloudinary dashboard |
-| `CLOUDINARY_API_KEY` | yes | Cloudinary API Keys |
-| `CLOUDINARY_API_SECRET` | yes | Cloudinary API Keys |
+| `GOOGLE_APPLICATION_CREDENTIALS` | alternative | Path to a service-account JSON |
+| `CLOUDINARY_CLOUD_NAME` | yes (production) | Cloudinary dashboard |
+| `CLOUDINARY_API_KEY` | yes (production) | Cloudinary API Keys |
+| `CLOUDINARY_API_SECRET` | yes (production) | Cloudinary API Keys |
+| `ADMIN_EMAILS` | yes (production) | Comma-separated admin accounts |
+| `ADMIN_REVIEW_PUBLIC_KEY` | yes (production) | From YACK-Admin `scripts/generate-admin-review-key.mjs` |
+| `CORS_ORIGINS` | yes (production) | Comma-separated allowed browser origins (fail-closed) |

@@ -6,12 +6,15 @@ import {
     MediaValidationError,
 } from "../utils/mediaHandler.js";
 import { sendNotification } from "../utils/sendNotification.js";
+import { arrayBelowCap, MAX_MEDIA_PER_CONTRACT } from "../utils/quota.js";
+import { parseLimit, parseOffset } from "../utils/pagination.js";
+import { logger } from "../utils/logger.js";
 
 function mediaErrorResponse(res, error, fallback) {
     if (error instanceof MediaValidationError || error instanceof MediaConfigurationError) {
         return res.status(error.statusCode).json({ error: error.message });
     }
-    console.error(`[media] ${fallback}:`, error.message);
+    logger.error(`[media] ${fallback}:`, { error: error.message });
     return res.status(500).json({ error: fallback });
 }
 
@@ -33,12 +36,14 @@ export const sendMedia = async (req, res) => {
             createdAt,
         };
 
-        // Atomically append so simultaneous uploads/messages cannot overwrite
-        // each other's embedded-array changes.
+        // Atomically append (races cannot overwrite embedded-array changes) with
+        // an inline cap test so concurrent uploads cannot both exceed the limit
+        // (F-01/F-45). The Cloudinary artifact is only kept once this write wins.
         const updated = await Contract.findOneAndUpdate(
             {
                 _id: req.contract._id,
                 $or: [{ userA: req.userDoc._id }, { userB: req.userDoc._id }],
+                ...arrayBelowCap("media", MAX_MEDIA_PER_CONTRACT),
             },
             { $push: { media: entry } },
             { new: true, runValidators: true, projection: { userA: 1, userB: 1 } }
@@ -46,7 +51,20 @@ export const sendMedia = async (req, res) => {
 
         if (!updated) {
             await MediaHandler.delete(stored.path).catch(() => undefined);
-            return res.status(404).json({ error: "Contract not found" });
+            const existing = await Contract.findById(req.contract._id).select("media");
+            if (!existing) {
+                return res.status(404).json({ error: "Contract not found" });
+            }
+            if ((existing.media || []).length >= MAX_MEDIA_PER_CONTRACT) {
+                return res.status(400).json({
+                    error: "Media limit reached for this contract",
+                    code: "MEDIA_QUOTA_EXCEEDED",
+                });
+            }
+            return res.status(409).json({
+                error: "Could not attach media",
+                code: "MEDIA_APPEND_CONFLICT",
+            });
         }
         persisted = true;
 
@@ -64,6 +82,9 @@ export const sendMedia = async (req, res) => {
 
         const recipientId = req.isUserA ? updated.userB : updated.userA;
         if (recipientId) {
+            // F-30: the media id alone was useless to a client that lost the
+            // push; include the storage path so the thread can be hydrated
+            // without re-fetching by id.
             void sendNotification(
                 recipientId,
                 "new_media",
@@ -72,6 +93,7 @@ export const sendMedia = async (req, res) => {
                     type: "contractMedia",
                     contractId: updated._id.toString(),
                     mediaId: entry._id.toString(),
+                    mediaPath: stored.path.slice(0, 250),
                 },
                 {
                     localize: true,
@@ -85,7 +107,9 @@ export const sendMedia = async (req, res) => {
     } catch (error) {
         if (stored && !persisted) {
             await MediaHandler.delete(stored.path).catch((cleanupError) => {
-                console.error("[media] Failed to clean up orphaned upload:", cleanupError.message);
+                logger.error("[media] Failed to clean up orphaned upload:", {
+                    error: cleanupError.message,
+                });
             });
         }
         if (!res.headersSent) {
@@ -95,9 +119,22 @@ export const sendMedia = async (req, res) => {
 };
 
 export const getAllMedia = async (req, res) => {
+    // F-14: bounded pagination instead of an unbounded embedded array.
+    const limit = parseLimit(req.query.limit, { defaultValue: 100, max: 100 });
+    const offset = parseOffset(req.query.offset, { defaultValue: 0 });
+
     try {
+        const [totalResult] = await Contract.aggregate([
+            { $match: { _id: req.contract._id } },
+            { $project: { total: { $size: { $ifNull: ["$media", []] } } } },
+        ]);
+
+        if (!totalResult) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
         const contract = await Contract.findById(req.contract._id)
-            .select("media")
+            .select({ media: { $slice: [offset, limit] } })
             .populate("media.who", "firstName lastName");
 
         if (!contract) {
@@ -107,9 +144,18 @@ export const getAllMedia = async (req, res) => {
         const media = [...contract.media].sort(
             (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
         );
-        res.json({ success: true, media });
+        res.json({
+            success: true,
+            media,
+            pagination: {
+                total: totalResult.total,
+                limit,
+                offset,
+                hasMore: offset + media.length < totalResult.total,
+            },
+        });
     } catch (error) {
-        console.error("[media] Failed to fetch media:", error.message);
+        logger.error("[media] Failed to fetch media:", { error: error.message });
         res.status(500).json({ error: "Failed to fetch media" });
     }
 };

@@ -3,11 +3,13 @@ import mongoose from "mongoose";
 import Contract from "../models/Contract.js";
 import SupportThread from "../models/SupportThread.js";
 import User from "../models/User.js";
+import AdminAuditLog from "../models/AdminAuditLog.js";
 import { sendNotification } from "../utils/sendNotification.js";
 import { ensureSupportThread } from "./supportController.js";
+import { validateCiphertext, validateHash } from "../utils/validation.js";
+import { parseLimit, parseOffset } from "../utils/pagination.js";
+import { logger } from "../utils/logger.js";
 
-const HASH_PATTERN = /^[a-f0-9]{64}$/i;
-const MAX_CIPHERTEXT_LENGTH = 16_384;
 const MAX_RESOLUTION_NOTE_LENGTH = 4_000;
 
 const openDisputeFilter = {
@@ -16,6 +18,22 @@ const openDisputeFilter = {
         { status: "disputed", disputeState: { $ne: "resolved" } },
     ],
 };
+
+/**
+ * Append-only audit record for privileged admin actions (F-47). Fire-and-forget:
+ * a failed audit write is logged but never fails the action it records.
+ */
+function auditAdminAction({ actorId, action, contractId, userId, summary }) {
+    return AdminAuditLog.create({
+        actorId: String(actorId),
+        action,
+        contractId: contractId || undefined,
+        userId: userId || undefined,
+        summary: String(summary || "").slice(0, 500),
+    }).catch((error) => {
+        logger.error("[admin] Failed to record audit trail:", { error: error.message });
+    });
+}
 
 function participant(user) {
     if (!user) return null;
@@ -63,22 +81,11 @@ function adminSupportMessage(message) {
     };
 }
 
+/** F-41: admin support replies use the same shared ciphertext/hash validators. */
 function validateEncryptedMessage(body) {
-    const contentForUser = String(body?.contentForUser || "").trim();
-    const contentForAdmin = String(body?.contentForAdmin || "").trim();
-    const contentHash = String(body?.contentHash || "").trim().toLowerCase();
-    if (!contentForUser || !contentForAdmin) {
-        throw new TypeError("Both encrypted message envelopes are required");
-    }
-    if (
-        contentForUser.length > MAX_CIPHERTEXT_LENGTH
-        || contentForAdmin.length > MAX_CIPHERTEXT_LENGTH
-    ) {
-        throw new RangeError("Encrypted message is too large");
-    }
-    if (!HASH_PATTERN.test(contentHash)) {
-        throw new TypeError("Content hash must be a SHA-256 hex digest");
-    }
+    const contentForUser = validateCiphertext(body?.contentForUser, "Encrypted content for user");
+    const contentForAdmin = validateCiphertext(body?.contentForAdmin, "Encrypted content for admin");
+    const contentHash = validateHash(body?.contentHash, { label: "Content hash" });
     return { contentForUser, contentForAdmin, contentHash };
 }
 
@@ -88,10 +95,6 @@ export const getAdminIdentity = async (req, res) => {
 
 export const getAnalytics = async (req, res) => {
     try {
-        const since = new Date();
-        since.setUTCDate(since.getUTCDate() - 29);
-        since.setUTCHours(0, 0, 0, 0);
-
         const [
             users,
             completedUsers,
@@ -101,7 +104,6 @@ export const getAnalytics = async (req, res) => {
             openDisputes,
             resolvedDisputes,
             openSupportThreads,
-            contractTrend,
         ] = await Promise.all([
             User.countDocuments(),
             User.countDocuments({ isComplete: true }),
@@ -111,21 +113,6 @@ export const getAnalytics = async (req, res) => {
             Contract.countDocuments(openDisputeFilter),
             Contract.countDocuments({ disputeState: "resolved" }),
             SupportThread.countDocuments({ status: "open" }),
-            Contract.aggregate([
-                { $match: { createdAt: { $gte: since } } },
-                {
-                    $group: {
-                        _id: {
-                            $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
-                        },
-                        contracts: { $sum: 1 },
-                        disputes: {
-                            $sum: { $cond: [{ $eq: ["$status", "disputed"] }, 1, 0] },
-                        },
-                    },
-                },
-                { $sort: { _id: 1 } },
-            ]),
         ]);
 
         return res.json({
@@ -139,37 +126,47 @@ export const getAnalytics = async (req, res) => {
                 openDisputes,
                 resolvedDisputes,
                 openSupportThreads,
-                contractTrend: contractTrend.map((day) => ({
-                    date: day._id,
-                    contracts: day.contracts,
-                    disputes: day.disputes,
-                })),
             },
         });
     } catch (error) {
-        console.error("[admin] Failed to load analytics:", error.message);
+        logger.error("[admin] Failed to load analytics:", { error: error.message });
         return res.status(500).json({ error: "Failed to load analytics" });
     }
 };
 
 export const listDisputes = async (req, res) => {
+    // F-14: bounded pages for the dispute queue (default mirrors the previous
+    // 250 hard cap; the admin UI can page through by offset).
+    const limit = parseLimit(req.query.limit, { defaultValue: 250, max: 250 });
+    const offset = parseOffset(req.query.offset, { defaultValue: 0 });
+
     const requestedState = req.query.state === "resolved" ? "resolved" : "open";
     const filter = requestedState === "resolved"
         ? { disputeState: "resolved" }
         : openDisputeFilter;
 
     try {
-        const contracts = await Contract.find(filter)
-            .populate("userA", "firstName lastName email publicKey")
-            .populate("userB", "firstName lastName email publicKey")
-            .sort({ updatedAt: -1 })
-            .limit(250);
+        const [total, contracts] = await Promise.all([
+            Contract.countDocuments(filter),
+            Contract.find(filter)
+                .populate("userA", "firstName lastName email publicKey")
+                .populate("userB", "firstName lastName email publicKey")
+                .sort({ updatedAt: -1 })
+                .skip(offset)
+                .limit(limit),
+        ]);
         return res.json({
             success: true,
             disputes: contracts.map(disputeSummary),
+            pagination: {
+                total,
+                limit,
+                offset,
+                hasMore: offset + contracts.length < total,
+            },
         });
     } catch (error) {
-        console.error("[admin] Failed to list disputes:", error.message);
+        logger.error("[admin] Failed to list disputes:", { error: error.message });
         return res.status(500).json({ error: "Failed to list disputes" });
     }
 };
@@ -188,6 +185,13 @@ export const getDispute = async (req, res) => {
             return res.status(404).json({ error: "Dispute not found" });
         }
 
+        auditAdminAction({
+            actorId: req.adminIdentity.uid,
+            action: "dispute.viewed",
+            contractId: contract._id,
+            summary: `Threads: ${(contract.reviewAccessGrants || []).length} grant(s)`,
+        });
+
         const participants = [
             contract.userA?._id,
             contract.userB?._id,
@@ -199,6 +203,11 @@ export const getDispute = async (req, res) => {
         const threads = await SupportThread.find({ contract: contract._id })
             .populate("user", "firstName lastName email publicKey")
             .sort({ updatedAt: -1 });
+
+        // F-55: support-thread attachments may contain party-to-party media;
+        // the app's contract-scoped review grant is what authorizes admin
+        // (re)view of the dispute, so without a grant nothing is disclosed.
+        const grantAuthorized = (contract.reviewAccessGrants || []).length > 0;
 
         return res.json({
             success: true,
@@ -217,7 +226,7 @@ export const getDispute = async (req, res) => {
                 // Existing attachments use the app's current Cloudinary URL
                 // format, so never disclose them to an admin before a disputing
                 // user explicitly grants contract-scoped review access.
-                media: contract.reviewAccessGrants?.length
+                media: grantAuthorized
                     ? (contract.media || []).map((item) => ({
                         _id: item._id,
                         who: item.who,
@@ -233,21 +242,23 @@ export const getDispute = async (req, res) => {
                     user: participant(thread.user),
                     status: thread.status,
                     messages: thread.messages.map(adminSupportMessage),
-                    attachments: (thread.attachments || []).map((attachment) => ({
-                        _id: attachment._id,
-                        url: attachment.url,
-                        originalFilename: attachment.originalFilename,
-                        mimeType: attachment.mimeType,
-                        size: attachment.size || 0,
-                        createdAt: attachment.createdAt,
-                    })),
+                    attachments: grantAuthorized
+                        ? (thread.attachments || []).map((attachment) => ({
+                            _id: attachment._id,
+                            url: attachment.url,
+                            originalFilename: attachment.originalFilename,
+                            mimeType: attachment.mimeType,
+                            size: attachment.size || 0,
+                            createdAt: attachment.createdAt,
+                        }))
+                        : [],
                     createdAt: thread.createdAt,
                     updatedAt: thread.updatedAt,
                 })),
             },
         });
     } catch (error) {
-        console.error("[admin] Failed to load dispute:", error.message);
+        logger.error("[admin] Failed to load dispute:", { error: error.message });
         return res.status(500).json({ error: "Failed to load dispute" });
     }
 };
@@ -283,6 +294,13 @@ export const sendAdminSupportMessage = async (req, res) => {
             return res.status(404).json({ error: "Open support conversation not found" });
         }
 
+        auditAdminAction({
+            actorId: req.adminIdentity.uid,
+            action: "support.message.sent",
+            contractId,
+            userId,
+        });
+
         void sendNotification(
             userId,
             "YACK Support",
@@ -295,7 +313,7 @@ export const sendAdminSupportMessage = async (req, res) => {
             message: adminSupportMessage(entry),
         });
     } catch (error) {
-        console.error("[admin] Failed to send support message:", error.message);
+        logger.error("[admin] Failed to send support message:", { error: error.message });
         return res.status(500).json({ error: "Failed to send support message" });
     }
 };
@@ -352,6 +370,14 @@ export const resolveDispute = async (req, res) => {
             { contract: current._id, status: "open" },
             { $set: { status: "closed" } }
         );
+
+        auditAdminAction({
+            actorId: req.adminIdentity.uid,
+            action: "dispute.resolved",
+            contractId: current._id,
+            summary: `Outcome: ${outcome}${note ? ` — ${note}` : ""}`,
+        });
+
         for (const userId of [current.userA, current.userB]) {
             void sendNotification(
                 userId,
@@ -366,7 +392,7 @@ export const resolveDispute = async (req, res) => {
             dispute: disputeSummary(updated),
         });
     } catch (error) {
-        console.error("[admin] Failed to resolve dispute:", error.message);
+        logger.error("[admin] Failed to resolve dispute:", { error: error.message });
         return res.status(500).json({ error: "Failed to resolve dispute" });
     }
 };

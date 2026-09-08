@@ -46,21 +46,125 @@ export class MediaConfigurationError extends Error {
     }
 }
 
-function getConfiguredCloudinary() {
-    const cloudName = process.env.CLOUDINARY_CLOUD_NAME;
-    const apiKey = process.env.CLOUDINARY_API_KEY;
-    const apiSecret = process.env.CLOUDINARY_API_SECRET;
+export function resolveCloudinaryConfig(env = process.env) {
+    const cloudName = env.CLOUDINARY_CLOUD_NAME;
+    const apiKey = env.CLOUDINARY_API_KEY;
+    const apiSecret = env.CLOUDINARY_API_SECRET;
+    if (!cloudName || !apiKey || !apiSecret) return null;
+    return { cloudName, apiKey, apiSecret };
+}
 
-    if (!cloudName || !apiKey || !apiSecret) {
+function getConfiguredCloudinary() {
+    const config = resolveCloudinaryConfig();
+    if (!config) {
         throw new MediaConfigurationError();
     }
 
     cloudinary.config({
-        cloud_name: cloudName,
-        api_key: apiKey,
-        api_secret: apiSecret,
+        cloud_name: config.cloudName,
+        api_key: config.apiKey,
+        api_secret: config.apiSecret,
     });
     return cloudinary;
+}
+
+function cloudinaryClient(client) {
+    return client || getConfiguredCloudinary();
+}
+
+/**
+ * Boot-time connectivity check (F-69): validates the configured Cloudinary
+ * credentials. The assumption is validated at import/startup rather than
+ * failing lazily on the first media upload.
+ */
+export async function pingCloudinary(client = null) {
+    const storage = cloudinaryClient(client);
+    const result = await storage.api.ping();
+    if (result?.status !== "ok") {
+        throw new Error("Unexpected Cloudinary ping response");
+    }
+    return result;
+}
+
+/**
+ * F-42: content sniffing against declared MIME type (magic bytes).
+ *
+ * A client can declare any MIME type; the extension map only validates the
+ * filename extension. This check verifies the actual leading bytes match the
+ * type the server will serve, so a malicious "image/png" upload that is
+ * actually an HTML document or script cannot masquerade in the media feed.
+ */
+function isFtypContainer(buffer) {
+    if (buffer.length < 12) return false;
+    const box = buffer.readUInt32BE(0);
+    // ISO BMFF 'ftyp' box at offset 0.
+    if (box + 4 <= buffer.length && buffer.toString("latin1", 4, 8) === "ftyp") {
+        return true;
+    }
+    return false;
+}
+
+function verifyMagicBytes(buffer, mimeType) {
+    const isFtyp = isFtypContainer(buffer);
+    switch (mimeType) {
+        case "image/jpeg":
+            return buffer.length >= 3 && buffer[0] === 0xff && buffer[1] === 0xd8 && buffer[2] === 0xff;
+        case "image/png":
+            return buffer.length >= 8 &&
+                buffer[0] === 0x89 && buffer[1] === 0x50 && buffer[2] === 0x4e &&
+                buffer[3] === 0x47 && buffer[4] === 0x0d && buffer[5] === 0x0a &&
+                buffer[6] === 0x1a && buffer[7] === 0x0a;
+        case "image/gif":
+            return buffer.length >= 6 &&
+                (buffer.toString("latin1", 0, 6) === "GIF87a" ||
+                    buffer.toString("latin1", 0, 6) === "GIF89a");
+        case "image/webp":
+            return buffer.length >= 12 &&
+                buffer.toString("latin1", 0, 4) === "RIFF" &&
+                buffer.toString("latin1", 8, 12) === "WEBP";
+        case "image/bmp":
+            return buffer.length >= 2 &&
+                buffer[0] === 0x42 && buffer[1] === 0x4d; // "BM"
+        case "application/pdf":
+            return buffer.length >= 5 && buffer.toString("latin1", 0, 5) === "%PDF-";
+        case "application/msword":
+        case "application/vnd.ms-excel":
+            // OLE2 (legacy .doc/.xls) or an OFC zip container.
+            return (buffer.length >= 8 &&
+                buffer[0] === 0xd0 && buffer[1] === 0xcf && buffer[2] === 0x11 &&
+                buffer[3] === 0xe0 && buffer[4] === 0xa1 && buffer[5] === 0xb1 &&
+                buffer[6] === 0x1a && buffer[7] === 0xe1) ||
+                (buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b &&
+                    (buffer[2] === 0x03 || buffer[2] === 0x05) && buffer[3] === 0x04);
+        case "application/vnd.openxmlformats-officedocument.wordprocessingml.document":
+        case "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet":
+            return buffer.length >= 4 && buffer[0] === 0x50 && buffer[1] === 0x4b &&
+                (buffer[2] === 0x03 || buffer[2] === 0x05) && buffer[3] === 0x04; // zip
+        case "video/mp4":
+        case "video/quicktime":
+        case "video/x-m4v":
+        case "video/3gpp":
+        case "image/heic":
+        case "image/heif":
+            // ISO BMFF family (mp4, mov, m4v, 3gp, heic): 'ftyp' at offset 4.
+            return isFtyp;
+        case "video/webm":
+            return buffer.length >= 4 &&
+                buffer[0] === 0x1a && buffer[1] === 0x45 && buffer[2] === 0xdf && buffer[3] === 0xa3; // EBML
+        case "text/plain":
+        case "text/csv":
+            // Text: reject NUL bytes and heavy control-character content.
+            if (!buffer.length) return false;
+            let controlBytes = 0;
+            for (let index = 0; index < buffer.length; index += 1) {
+                const byte = buffer[index];
+                if (byte === 0) return false;
+                if (byte < 0x09 || (byte > 0x0d && byte < 0x20)) controlBytes += 1;
+            }
+            return controlBytes <= buffer.length * 0.2;
+        default:
+            return true; // no supported signature, do not block unknown types
+    }
 }
 
 function normalizeBase64(value) {
@@ -140,6 +244,12 @@ export function validateMediaPayload(media) {
     const buffer = normalizeBase64(media.buffer);
     const mimeType = inferMediaMimeType(filename, media.mimeType);
 
+    if (!verifyMagicBytes(Buffer.from(buffer, "base64"), mimeType)) {
+        throw new MediaValidationError(
+            "Media content does not match its declared type"
+        );
+    }
+
     return { filename, buffer, mimeType };
 }
 
@@ -151,10 +261,6 @@ function makePublicId(filename) {
         .replace(/^-+|-+$/g, "")
         .slice(0, 80) || "attachment";
     return `${stem}_${Date.now()}_${crypto.randomBytes(8).toString("hex")}`;
-}
-
-function cloudinaryClient(client) {
-    return client || getConfiguredCloudinary();
 }
 
 export class MediaHandler {
