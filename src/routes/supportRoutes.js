@@ -5,6 +5,9 @@ import {
     getUserSupportThread,
     grantReviewAccess,
     sendUserSupportMessage,
+    uploadSupportAttachment,
+    getSupportAttachments,
+    deleteSupportAttachment,
 } from "../controllers/supportController.js";
 import auth from "../middleware/auth.js";
 import checkContractPermission from "../middleware/contractPermission.js";
@@ -33,6 +36,27 @@ router.post(
     requireActiveAccount,
     checkContractPermission,
     sendUserSupportMessage
+);
+router.post(
+    "/attachments",
+    auth,
+    requireActiveAccount,
+    checkContractPermission,
+    uploadSupportAttachment
+);
+router.get(
+    "/attachments",
+    auth,
+    requireActiveAccount,
+    checkContractPermission,
+    getSupportAttachments
+);
+router.delete(
+    "/attachments/:mediaId",
+    auth,
+    requireActiveAccount,
+    checkContractPermission,
+    deleteSupportAttachment
 );
 
 export default router;

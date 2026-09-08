@@ -18,6 +18,13 @@ const MIME_BY_EXTENSION = new Map([
     [".m4v", "video/x-m4v"],
     [".webm", "video/webm"],
     [".3gp", "video/3gpp"],
+    [".pdf", "application/pdf"],
+    [".doc", "application/msword"],
+    [".docx", "application/vnd.openxmlformats-officedocument.wordprocessingml.document"],
+    [".xls", "application/vnd.ms-excel"],
+    [".xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
+    [".txt", "text/plain"],
+    [".csv", "text/csv"],
 ]);
 
 export class MediaValidationError extends Error {
@@ -118,7 +125,7 @@ export function inferMediaMimeType(filename, suppliedMimeType) {
             "Unsupported media type. Upload a supported image or video."
         );
     }
-    if (supplied && !/^(image|video)\/[a-z0-9.+-]+$/.test(supplied)) {
+    if (supplied && !/^(image|video|application|text)\/[a-z0-9.+-]+$/.test(supplied)) {
         throw new MediaValidationError("Media MIME type is invalid");
     }
     return inferred;
@@ -158,10 +165,15 @@ export class MediaHandler {
         const validated = validateMediaPayload(media);
         const storage = cloudinaryClient(client);
         const dataUri = `data:${validated.mimeType};base64,${validated.buffer}`;
+        const resourceType = validated.mimeType.startsWith("image/")
+            ? "image"
+            : validated.mimeType.startsWith("video/")
+                ? "video"
+                : "raw";
 
         const uploadResult = await storage.uploader.upload(dataUri, {
             public_id: makePublicId(validated.filename),
-            resource_type: "auto",
+            resource_type: resourceType,
             folder: "yack-media",
         });
 

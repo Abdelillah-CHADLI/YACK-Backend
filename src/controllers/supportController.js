@@ -2,9 +2,15 @@ import mongoose from "mongoose";
 
 import Contract from "../models/Contract.js";
 import SupportThread from "../models/SupportThread.js";
+import {
+    MediaConfigurationError,
+    MediaHandler,
+    MediaValidationError,
+} from "../utils/mediaHandler.js";
 
 const MAX_CIPHERTEXT_LENGTH = 16_384;
 const MAX_REVIEW_MESSAGES = 250;
+const MAX_SUPPORT_ATTACHMENTS = 25;
 const HASH_PATTERN = /^[a-f0-9]{64}$/i;
 
 function requiredCiphertext(value, label) {
@@ -37,6 +43,19 @@ function userMessagePayload(message) {
         content: message.contentForUser,
         contentHash: message.contentHash,
         createdAt: message.createdAt,
+    };
+}
+
+function supportAttachmentPayload(attachment) {
+    return {
+        _id: attachment._id,
+        who: attachment.who,
+        content: attachment.content,
+        url: attachment.url,
+        originalFilename: attachment.originalFilename,
+        mimeType: attachment.mimeType,
+        size: attachment.size || 0,
+        createdAt: attachment.createdAt,
     };
 }
 
@@ -155,6 +174,7 @@ export const getUserSupportThread = async (req, res) => {
                     (grant) => grant.grantedBy.toString() === req.userDoc._id.toString()
                 ),
                 messages: thread.messages.map(userMessagePayload),
+                attachments: (thread.attachments || []).map(supportAttachmentPayload),
                 createdAt: thread.createdAt,
                 updatedAt: thread.updatedAt,
             },
@@ -199,5 +219,112 @@ export const sendUserSupportMessage = async (req, res) => {
     } catch (error) {
         console.error("[support] Failed to send support message:", error.message);
         return res.status(500).json({ error: "Failed to send support message" });
+    }
+};
+
+export const uploadSupportAttachment = async (req, res) => {
+    if (!callerInDispute(req)) {
+        return res.status(403).json({ error: "No support case exists for this user" });
+    }
+
+    let stored;
+    let persisted = false;
+    try {
+        const thread = await ensureSupportThread(req.contract._id, req.userDoc._id);
+        if (!thread || thread.status !== "open") {
+            return res.status(409).json({ error: "This support conversation is closed" });
+        }
+        if ((thread.attachments || []).length >= MAX_SUPPORT_ATTACHMENTS) {
+            return res.status(400).json({ error: "Too many support attachments" });
+        }
+
+        stored = await MediaHandler.send(req.body?.file);
+        const entry = {
+            _id: new mongoose.Types.ObjectId(),
+            who: req.userDoc._id,
+            content: stored.path,
+            url: stored.url,
+            originalFilename: stored.originalFilename,
+            mimeType: stored.mimeType,
+            size: stored.size || 0,
+            createdAt: new Date(),
+        };
+
+        const updated = await SupportThread.findOneAndUpdate(
+            { contract: req.contract._id, user: req.userDoc._id, status: "open" },
+            { $push: { attachments: entry } },
+            { new: true, runValidators: true }
+        );
+        if (!updated) {
+            await MediaHandler.delete(stored.path).catch(() => undefined);
+            return res.status(409).json({ error: "This support conversation is closed" });
+        }
+        persisted = true;
+        return res.status(201).json({ success: true, attachment: supportAttachmentPayload(entry) });
+    } catch (error) {
+        if (stored && !persisted) {
+            await MediaHandler.delete(stored.path).catch(() => undefined);
+        }
+        if (error instanceof MediaValidationError || error instanceof MediaConfigurationError) {
+            return res.status(error.statusCode).json({ error: error.message });
+        }
+        console.error("[support] Failed to upload support attachment:", error.message);
+        return res.status(500).json({ error: "Failed to upload support attachment" });
+    }
+};
+
+export const getSupportAttachments = async (req, res) => {
+    if (!callerInDispute(req)) {
+        return res.status(403).json({ error: "No support case exists for this user" });
+    }
+
+    try {
+        const thread = await ensureSupportThread(req.contract._id, req.userDoc._id);
+        const attachments = [...(thread.attachments || [])].sort(
+            (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+        );
+        return res.json({
+            success: true,
+            attachments: attachments.map(supportAttachmentPayload),
+        });
+    } catch (error) {
+        console.error("[support] Failed to load support attachments:", error.message);
+        return res.status(500).json({ error: "Failed to load support attachments" });
+    }
+};
+
+export const deleteSupportAttachment = async (req, res) => {
+    if (!callerInDispute(req)) {
+        return res.status(403).json({ error: "No support case exists for this user" });
+    }
+
+    const { mediaId } = req.params;
+    if (!mediaId || !mongoose.Types.ObjectId.isValid(mediaId)) {
+        return res.status(400).json({ error: "Invalid attachment ID" });
+    }
+
+    try {
+        const thread = await SupportThread.findOne({
+            contract: req.contract._id,
+            user: req.userDoc._id,
+            status: "open",
+            "attachments._id": mediaId,
+        });
+        const attachment = thread?.attachments.id(mediaId);
+        if (!attachment || attachment.who.toString() !== req.userDoc._id.toString()) {
+            return res.status(404).json({ error: "Attachment not found" });
+        }
+
+        await SupportThread.updateOne(
+            { contract: req.contract._id, user: req.userDoc._id, status: "open" },
+            { $pull: { attachments: { _id: mediaId } } }
+        );
+        if (attachment.content) {
+            await MediaHandler.delete(attachment.content).catch(() => undefined);
+        }
+        return res.json({ success: true });
+    } catch (error) {
+        console.error("[support] Failed to delete support attachment:", error.message);
+        return res.status(500).json({ error: "Failed to delete support attachment" });
     }
 };

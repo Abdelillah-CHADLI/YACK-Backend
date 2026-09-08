@@ -126,7 +126,23 @@ Also guarded by `auth` + `checkContractPermission`.
 | `GET` | `/all` | Return all media entries for a contract. | Query: `contractId` |
 | `GET` | `/get` | Return one media entry and its usable URL. | Query: `contractId`, `mediaId` |
 
-`POST /media/send` accepts supported image/video formats up to 6 MB, uploads them to Cloudinary, and atomically appends the resulting URL and metadata to `contract.media`.
+`POST /media/send` accepts supported image/video/document formats up to 6 MB, uploads them to Cloudinary, and atomically appends the resulting URL and metadata to `contract.media`.
+
+---
+## Support Routes (`/support`)
+Guarded by `auth` + `checkContractPermission` (and `requireActiveAccount` except `/review-key`). Only parties involved in an open dispute can access their support case.
+
+| Method | Path | Description | Payload |
+| --- | --- | --- | --- |
+| `GET` | `/review-key` | Admin review public key for encrypting case material. | Auth only. |
+| `GET` | `/thread` | Load the caller's support conversation (messages encrypted for the caller). | Query: `contractId` |
+| `POST` | `/review-access` | Share the encrypted contract details + chat for admin review. | `{ "contractId": "...", "titleForAdmin": "<encrypted>", "descriptionForAdmin": "<encrypted>", "priceForAdmin": "<encrypted>", "messages": [...] }` |
+| `POST` | `/messages` | Append an encrypted support message. | `{ "contractId": "...", "contentForUser": "<encrypted>", "contentForAdmin": "<encrypted>", "contentHash": "<sha256>" }` |
+| `POST` | `/attachments` | Upload a file to the caller's support case. | `{ "contractId": "...", "file": { "filename": "invoice.pdf", "buffer": "<base64>", "mimeType": "application/pdf" } }` |
+| `GET` | `/attachments` | List the caller's support case attachments. | Query: `contractId` |
+| `DELETE` | `/attachments/:mediaId` | Remove one of the caller's own attachments. | URL parameter: `mediaId` |
+
+Support attachments accept the same image/video/document formats and size limits as `/media/send`, are stored on the caller's `SupportThread`, and are disclosed to administrators per-thread in `GET /admin/disputes/:contractId`.
 
 ---
 ## Notifications

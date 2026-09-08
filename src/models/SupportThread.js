@@ -18,6 +18,20 @@ const SupportMessageSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now },
 }, { _id: true });
 
+const SupportAttachmentSchema = new mongoose.Schema({
+    who: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+    },
+    content: { type: String, required: true },  // Cloudinary public_id
+    url: { type: String, default: "" },  // Cloudinary secure URL
+    originalFilename: { type: String, default: "" },
+    mimeType: { type: String, default: "" },
+    size: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now },
+}, { _id: true });
+
 const SupportThreadSchema = new mongoose.Schema({
     contract: {
         type: mongoose.Schema.Types.ObjectId,
@@ -35,6 +49,7 @@ const SupportThreadSchema = new mongoose.Schema({
         default: "open",
     },
     messages: [SupportMessageSchema],
+    attachments: [SupportAttachmentSchema],
 }, { timestamps: true });
 
 SupportThreadSchema.index({ contract: 1, user: 1 }, { unique: true });
