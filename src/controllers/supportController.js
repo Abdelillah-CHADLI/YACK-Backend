@@ -45,15 +45,7 @@ function userMessagePayload(message) {
 export async function ensureSupportThread(contractId, userId) {
     return SupportThread.findOneAndUpdate(
         { contract: contractId, user: userId },
-        {
-            $setOnInsert: {
-                contract: contractId,
-                user: userId,
-                status: "open",
-                messages: [],
-            },
-            $set: { status: "open" },
-        },
+        { $set: { status: "open" } },
         { new: true, upsert: true, setDefaultsOnInsert: true }
     );
 }
