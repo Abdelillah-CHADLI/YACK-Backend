@@ -41,6 +41,16 @@ export default async function auth(req, res, next) {
         const decoded = await admin.auth().verifyIdToken(token);
         const firebaseID = decoded.uid;
         const firebaseEmail = typeof decoded.email === "string" ? decoded.email : "";
+        let emailVerified = decoded.email_verified === true;
+
+        // A token issued before the user clicks the verification link keeps an
+        // old email_verified claim until it is refreshed. Check Firebase's live
+        // user record in that one stale-token case so account setup can continue
+        // without relying on a client-side forced token refresh.
+        if (!emailVerified) {
+            const firebaseUser = await admin.auth().getUser(firebaseID);
+            emailVerified = firebaseUser.emailVerified === true;
+        }
 
         const update = {
             $setOnInsert: {
@@ -67,7 +77,7 @@ export default async function auth(req, res, next) {
         user = await registerDeviceToken(user, suppliedFcmToken);
 
         req.userDoc = user;
-        req.emailVerified = decoded.email_verified === true;
+        req.emailVerified = emailVerified;
         req.firebaseUser = decoded;
         next();
     } catch (error) {
