@@ -253,6 +253,132 @@ export function validateMediaPayload(media) {
     return { filename, buffer, mimeType };
 }
 
+// F-05: an AES-GCM nonce encoded as canonical Base64 (12 bytes).
+function validateMediaIv(value) {
+    if (typeof value !== "string" || !value.trim()) {
+        throw new MediaValidationError("Encryption IV is required for encrypted media");
+    }
+    const normalized = value.trim();
+    if (
+        normalized.length % 4 !== 0 ||
+        !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)
+    ) {
+        throw new MediaValidationError("Encryption IV must be valid Base64");
+    }
+    const bytes = Buffer.from(normalized, "base64");
+    const canonicalInput = normalized.replace(/=+$/, "");
+    const canonicalDecoded = bytes.toString("base64").replace(/=+$/, "");
+    if (!bytes.length || canonicalInput !== canonicalDecoded) {
+        throw new MediaValidationError("Encryption IV must be valid Base64");
+    }
+    if (bytes.length !== 12) {
+        throw new MediaValidationError("Encryption IV must be 96 bits");
+    }
+    return normalized;
+}
+
+// F-05: an RSA-OAEP-SHA256 key-wrap envelope encoded as canonical Base64.
+function validateEnvelopeKey(value, label) {
+    if (typeof value !== "string" || !value.trim()) {
+        throw new MediaValidationError(`${label} is required for encrypted media`);
+    }
+    const normalized = value.trim();
+    if (
+        normalized.length % 4 !== 0 ||
+        !/^[A-Za-z0-9+/]*={0,2}$/.test(normalized)
+    ) {
+        throw new MediaValidationError(`${label} must be valid Base64`);
+    }
+    const bytes = Buffer.from(normalized, "base64");
+    const canonicalInput = normalized.replace(/=+$/, "");
+    const canonicalDecoded = bytes.toString("base64").replace(/=+$/, "");
+    if (!bytes.length || canonicalInput !== canonicalDecoded) {
+        throw new MediaValidationError(`${label} must be valid Base64`);
+    }
+    if (bytes.length < 128 || bytes.length > 512) {
+        throw new MediaValidationError(`${label} has an invalid size`);
+    }
+    return normalized;
+}
+
+// F-05: SHA-256 hex digest (lowercase) of the plaintext media bytes.
+function validateContentHash(value) {
+    if (typeof value !== "string" || !value.trim()) {
+        throw new MediaValidationError("Content hash is required for encrypted media");
+    }
+    const normalized = value.trim().toLowerCase();
+    if (!/^[a-f0-9]{64}$/.test(normalized)) {
+        throw new MediaValidationError("Content hash must be a SHA-256 hex digest");
+    }
+    return normalized;
+}
+
+/**
+ * F-05: validate a client-side encrypted media payload. Unlike plaintext
+ * uploads the bytes are AES-256-GCM ciphertext, so magic-byte sniffing is
+ * intentionally skipped (the server never sees the plaintext). The MIME
+ * allowlist and size cap still apply, and the key-wrap envelope must be
+ * present and canonical.
+ */
+export function validateEncryptedMediaPayload(media, { requireKeyParticipant = true } = {}) {
+    if (!media || typeof media !== "object" || Array.isArray(media)) {
+        throw new MediaValidationError("Media payload required");
+    }
+
+    const filename = sanitizeMediaFilename(media.filename);
+    const buffer = normalizeBase64(media.buffer);
+    const mimeType = inferMediaMimeType(filename, media.mimeType);
+    const iv = validateMediaIv(media.iv);
+    const contentHash = validateContentHash(media.contentHash);
+    const keyOwner = validateEnvelopeKey(media.keyOwner, "Key envelope for uploader");
+    const keyAdmin = validateEnvelopeKey(media.keyAdmin, "Key envelope for admin");
+    const keyParticipant = media.keyParticipant
+        ? validateEnvelopeKey(media.keyParticipant, "Key envelope for participant")
+        : "";
+    if (requireKeyParticipant && !keyParticipant) {
+        throw new MediaValidationError(
+            "Key envelope for participant is required for encrypted media"
+        );
+    }
+
+    return {
+        filename,
+        buffer,
+        mimeType,
+        iv,
+        contentHash,
+        keyOwner,
+        keyParticipant,
+        keyAdmin,
+    };
+}
+
+/**
+ * F-05: surface the encryption envelope of a stored media entry to clients.
+ * Legacy plaintext records (which predate F-05) normalize to encryptionVersion
+ * 0 so callers can branch without tripping over absent fields.
+ */
+export function mediaEnvelopeOf(entry) {
+    if (!entry?.encryptionVersion) {
+        return {
+            encryptionVersion: 0,
+            iv: "",
+            contentHash: "",
+            keyOwner: "",
+            keyParticipant: "",
+            keyAdmin: "",
+        };
+    }
+    return {
+        encryptionVersion: entry.encryptionVersion,
+        iv: entry.iv || "",
+        contentHash: entry.contentHash || "",
+        keyOwner: entry.keyOwner || "",
+        keyParticipant: entry.keyParticipant || "",
+        keyAdmin: entry.keyAdmin || "",
+    };
+}
+
 function makePublicId(filename) {
     const extension = path.extname(filename);
     const stem = path.basename(filename, extension)
@@ -266,10 +392,50 @@ function makePublicId(filename) {
 export class MediaHandler {
     /**
      * Upload an image/video payload. Passing a client is intended for isolated tests.
+     * With `{ encrypted: true }` (F-05) the payload is AES-256-GCM ciphertext:
+     * magic-byte sniffing is skipped, the envelope is validated, and the blob
+     * is stored as a raw Cloudinary resource so it is never transformed or
+     * sniffed into plaintext.
      */
-    static async send(media, client = null) {
-        const validated = validateMediaPayload(media);
+    static async send(media, client = null, options = {}) {
+        const validated = options.encrypted
+            ? validateEncryptedMediaPayload(media, options)
+            : validateMediaPayload(media);
         const storage = cloudinaryClient(client);
+
+        if (options.encrypted) {
+            // Ciphertext is opaque bytes; a raw resource guarantees the stored
+            // object is byte-for-byte what the client uploaded.
+            const dataUri = `data:${validated.mimeType};base64,${validated.buffer}`;
+            const uploadResult = await storage.uploader.upload(dataUri, {
+                public_id: makePublicId(validated.filename),
+                resource_type: "raw",
+                folder: "yack-media",
+            });
+
+            if (!uploadResult?.public_id || !uploadResult?.secure_url) {
+                throw new Error("Media storage returned an invalid upload response");
+            }
+
+            return {
+                path: uploadResult.public_id,
+                url: uploadResult.secure_url,
+                originalFilename: validated.filename,
+                mimeType: validated.mimeType,
+                cloudinaryId: uploadResult.public_id,
+                resourceType: uploadResult.resource_type,
+                format: uploadResult.format,
+                size: uploadResult.bytes,
+                encryptionVersion: 1,
+                encryption: "AES-256-GCM",
+                iv: validated.iv,
+                contentHash: validated.contentHash,
+                keyOwner: validated.keyOwner,
+                keyParticipant: validated.keyParticipant,
+                keyAdmin: validated.keyAdmin,
+            };
+        }
+
         const dataUri = `data:${validated.mimeType};base64,${validated.buffer}`;
         const resourceType = validated.mimeType.startsWith("image/")
             ? "image"

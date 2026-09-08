@@ -14,6 +14,18 @@ const EmbeddedMediaSchema = new mongoose.Schema({
     url: { type: String, default: "" },  // Cloudinary secure URL
     originalFilename: { type: String, default: "" },  // Original filename
     mimeType: { type: String, default: "" },  // MIME type
+    size: { type: Number, default: 0 },
+    // F-05: client-side encryption envelope. encryptionVersion 0 = legacy
+    // plaintext upload; 1 = AES-256-GCM ciphertext with the AES key RSA-OAEP
+    // wrapped for the uploader (keyOwner), the other contract party
+    // (keyParticipant) and the admin review key (keyAdmin). iv/contentHash are
+    // base64/hex of the plaintext-size metadata, never the content itself.
+    encryptionVersion: { type: Number, default: 0 },
+    iv: { type: String, default: "" },
+    contentHash: { type: String, default: "" },
+    keyOwner: { type: String, default: "" },
+    keyParticipant: { type: String, default: "" },
+    keyAdmin: { type: String, default: "" },
     createdAt: { type: Date, default: Date.now }
 }, { _id: true });
 

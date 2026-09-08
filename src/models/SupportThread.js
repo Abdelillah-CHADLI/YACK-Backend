@@ -29,6 +29,13 @@ const SupportAttachmentSchema = new mongoose.Schema({
     originalFilename: { type: String, default: "" },
     mimeType: { type: String, default: "" },
     size: { type: Number, default: 0 },
+    // F-05: client-side encryption envelope (same layout as contract media).
+    encryptionVersion: { type: Number, default: 0 },
+    iv: { type: String, default: "" },
+    contentHash: { type: String, default: "" },
+    keyOwner: { type: String, default: "" },
+    keyParticipant: { type: String, default: "" },
+    keyAdmin: { type: String, default: "" },
     createdAt: { type: Date, default: Date.now },
 }, { _id: true });
 

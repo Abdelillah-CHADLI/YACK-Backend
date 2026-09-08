@@ -23,6 +23,7 @@ test(
 
         const suffix = `${Date.now()}-${Math.random().toString(16).slice(2)}`;
         const firebaseIds = [`yack-e2e-a-${suffix}`, `yack-e2e-b-${suffix}`];
+        const adminUid = `yack-e2e-admin-${suffix}`;
         const uploadedMediaIds = [];
         const port = process.env.PORT || "3000";
         const baseUrl = `http://127.0.0.1:${port}`;
@@ -71,6 +72,14 @@ test(
             })));
 
             const [tokenA, tokenB] = await Promise.all(firebaseIds.map(idToken));
+
+            await admin.auth().createUser({
+                uid: adminUid,
+                email: `yack-e2e-admin-${suffix}@example.com`,
+                emailVerified: true,
+            });
+            await admin.auth().setCustomUserClaims(adminUid, { role: "admin" });
+            const adminToken = await idToken(adminUid);
             const finalize = (firstName) => ({
                 firstName,
                 lastName: "Integration",
@@ -145,6 +154,59 @@ test(
             assert.ok(listA.contracts.some((contract) => contract._id === contractId));
             assert.ok(listB.contracts.some((contract) => contract._id === contractId));
 
+            // F-16: resolving a dispute must be terminal — a concurrent second
+            // resolution is rejected and neither party can reopen the case.
+            const resolveScen = await api("POST", "/contracts/create", tokenA, {
+                hash: "resolve-secret",
+                titleUserA: "resolve-title",
+                descriptionUserA: "resolve-description",
+                priceUserA: "resolve-price",
+                detailsHash: "e".repeat(64),
+            }, 201);
+            await api("POST", "/contracts/join", tokenB, {
+                tempID: resolveScen.tempID,
+                hash: "resolve-secret",
+                titleUserB: "resolve-title-b",
+                descriptionUserB: "resolve-description-b",
+                priceUserB: "resolve-price-b",
+                detailsHash: "e".repeat(64),
+            });
+            await api("POST", "/contracts/sign", tokenA, {
+                tempID: resolveScen.tempID,
+            });
+            const resolveSigned = await api("POST", "/contracts/sign", tokenB, {
+                tempID: resolveScen.tempID,
+            });
+            const resolveContractId = resolveSigned.contractID;
+
+            await api("POST", "/contracts/dispute", tokenA, {
+                contractId: resolveContractId,
+                reason: "F-16 regression: resolve-vs-redispute race",
+            });
+
+            const resolved = await api(
+                "POST",
+                `/admin/disputes/${resolveContractId}/resolve`,
+                adminToken,
+                { outcome: "resume", note: "F-16 regression: resolve exactly once." }
+            );
+            assert.equal(resolved.dispute.disputeState, "resolved");
+            assert.equal(resolved.dispute.resolutionOutcome, "resume");
+            assert.equal(resolved.dispute.status, "pending");
+
+            await api(
+                "POST",
+                `/admin/disputes/${resolveContractId}/resolve`,
+                adminToken,
+                { outcome: "complete", note: "F-16 regression: second resolve must 409." },
+                409
+            );
+
+            await api("POST", "/contracts/dispute", tokenA, {
+                contractId: resolveContractId,
+                reason: "F-16 regression: reopening a resolved dispute must 409.",
+            }, 409);
+
             const senderCiphertext = Buffer.from("message-for-a").toString("base64");
             const recipientCiphertext = Buffer.from("message-for-b").toString("base64");
             await api("POST", "/messages/send", tokenA, {
@@ -208,7 +270,7 @@ test(
                 await MediaHandler.delete(publicId).catch(() => undefined);
             }
 
-            const users = await User.find({ firebaseID: { $in: firebaseIds } }).select("_id");
+            const users = await User.find({ firebaseID: { $in: [...firebaseIds, adminUid] } }).select("_id");
             const userIds = users.map((user) => user._id);
             if (userIds.length) {
                 await Promise.all([
@@ -221,7 +283,7 @@ test(
                     User.deleteMany({ _id: { $in: userIds } }),
                 ]);
             }
-            await admin.auth().deleteUsers(firebaseIds).catch(() => undefined);
+            await admin.auth().deleteUsers([...firebaseIds, adminUid]).catch(() => undefined);
             await mongoose.disconnect();
         }
     }

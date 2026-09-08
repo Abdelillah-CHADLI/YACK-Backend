@@ -5,7 +5,9 @@ import {
     MAX_MEDIA_BYTES,
     MediaHandler,
     MediaValidationError,
+    mediaEnvelopeOf,
     sanitizeMediaFilename,
+    validateEncryptedMediaPayload,
     validateMediaPayload,
 } from "../src/utils/mediaHandler.js";
 
@@ -115,4 +117,110 @@ test("media lookup probes the Cloudinary resource types", async () => {
     const result = await MediaHandler.get("yack-media/video_123", fakeCloudinary);
     assert.deepEqual(attempts, ["image", "video"]);
     assert.equal(result.resourceType, "video");
+});
+
+// F-05: encrypted-media helpers --------------------------------------------
+
+const IV_BASE64 = Buffer.from("AAAAAAAAAAAAg7QF/DYwJw").slice(0, 12).toString("base64");
+const WRAP_BASE64 = Buffer.alloc(256, 7).toString("base64");
+
+function encryptedPayload(overrides = {}) {
+    return {
+        filename: "proof.png",
+        buffer: Buffer.from("ciphertext-bytes-not-magic").toString("base64"),
+        mimeType: "image/png",
+        iv: IV_BASE64,
+        contentHash: "a".repeat(64),
+        keyOwner: WRAP_BASE64,
+        keyParticipant: WRAP_BASE64,
+        keyAdmin: WRAP_BASE64,
+        ...overrides,
+    };
+}
+
+test("encrypted payload validation skips magic sniffing but keeps the allowlist", () => {
+    // The bytes are opaque AES-GCM ciphertext, so no magic bytes are present.
+    const payload = validateEncryptedMediaPayload(encryptedPayload());
+    assert.equal(payload.mimeType, "image/png");
+    assert.equal(payload.iv, IV_BASE64);
+    assert.equal(payload.contentHash, "a".repeat(64));
+
+    // The MIME allowlist still applies to the declared type.
+    assert.throws(
+        () => validateEncryptedMediaPayload(encryptedPayload({ filename: "archive.exe" })),
+        MediaValidationError
+    );
+});
+
+test("encrypted payload validation rejects a junk envelope", () => {
+    assert.throws(
+        () => validateEncryptedMediaPayload(encryptedPayload({ iv: "%%%" })),
+        MediaValidationError
+    );
+    assert.throws(
+        () => validateEncryptedMediaPayload(encryptedPayload({ contentHash: "xyz" })),
+        MediaValidationError
+    );
+    assert.throws(
+        () => validateEncryptedMediaPayload(encryptedPayload({ keyOwner: undefined })),
+        MediaValidationError
+    );
+    assert.throws(
+        () => validateEncryptedMediaPayload(encryptedPayload({ keyParticipant: "%%%" })),
+        MediaValidationError
+    );
+});
+
+test("support attachments may omit the participant envelope", () => {
+    const { keyParticipant, ...rest } = encryptedPayload();
+    const payload = validateEncryptedMediaPayload(rest, { requireKeyParticipant: false });
+    assert.equal(payload.keyParticipant, "");
+});
+
+test("encrypted upload forces a raw Cloudinary resource and preserves the envelope", async () => {
+    let uploadedResourceType;
+    const fakeCloudinary = {
+        uploader: {
+            upload: async (dataUri, { resource_type: resourceType }) => {
+                uploadedResourceType = resourceType;
+                return {
+                    public_id: "yack-media/proof_123",
+                    secure_url: "https://media.example/proof.dat",
+                    resource_type: resourceType,
+                    format: "dat",
+                    bytes: 42,
+                };
+            },
+        },
+    };
+
+    const result = await MediaHandler.send(encryptedPayload(), fakeCloudinary, { encrypted: true });
+
+    assert.equal(uploadedResourceType, "raw");
+    assert.equal(result.encryptionVersion, 1);
+    assert.equal(result.encryption, "AES-256-GCM");
+    assert.equal(result.iv, IV_BASE64);
+    assert.equal(result.contentHash, "a".repeat(64));
+    assert.equal(result.keyOwner, WRAP_BASE64);
+    assert.equal(result.keyParticipant, WRAP_BASE64);
+    assert.equal(result.keyAdmin, WRAP_BASE64);
+});
+
+test("legacy media records normalize to encryptionVersion 0", () => {
+    assert.deepEqual(mediaEnvelopeOf({}), {
+        encryptionVersion: 0,
+        iv: "",
+        contentHash: "",
+        keyOwner: "",
+        keyParticipant: "",
+        keyAdmin: "",
+    });
+    const envelope = mediaEnvelopeOf({
+        encryptionVersion: 1,
+        iv: IV_BASE64,
+        contentHash: "b".repeat(64),
+        keyOwner: WRAP_BASE64,
+    });
+    assert.equal(envelope.encryptionVersion, 1);
+    assert.equal(envelope.keyParticipant, "");
 });

@@ -7,6 +7,7 @@ import AdminAuditLog from "../models/AdminAuditLog.js";
 import { sendNotification } from "../utils/sendNotification.js";
 import { ensureSupportThread } from "./supportController.js";
 import { validateCiphertext, validateHash } from "../utils/validation.js";
+import { mediaEnvelopeOf } from "../utils/mediaHandler.js";
 import { parseLimit, parseOffset } from "../utils/pagination.js";
 import { logger } from "../utils/logger.js";
 
@@ -236,6 +237,8 @@ export const getDispute = async (req, res) => {
                         content: item.content,
                         originalFilename: item.originalFilename,
                         mimeType: item.mimeType,
+                        size: item.size || 0,
+                        ...mediaEnvelopeOf(item),
                         createdAt: item.createdAt,
                     }))
                     : [],
@@ -251,6 +254,7 @@ export const getDispute = async (req, res) => {
                             originalFilename: attachment.originalFilename,
                             mimeType: attachment.mimeType,
                             size: attachment.size || 0,
+                            ...mediaEnvelopeOf(attachment),
                             createdAt: attachment.createdAt,
                         }))
                         : [],

@@ -6,6 +6,7 @@ import {
     MediaConfigurationError,
     MediaHandler,
     MediaValidationError,
+    mediaEnvelopeOf,
 } from "../utils/mediaHandler.js";
 import { validateCiphertext, validateHash } from "../utils/validation.js";
 import {
@@ -38,6 +39,7 @@ function supportAttachmentPayload(attachment) {
         originalFilename: attachment.originalFilename,
         mimeType: attachment.mimeType,
         size: attachment.size || 0,
+        ...mediaEnvelopeOf(attachment),
         createdAt: attachment.createdAt,
     };
 }
@@ -265,7 +267,13 @@ export const uploadSupportAttachment = async (req, res) => {
             });
         }
 
-        stored = await MediaHandler.send(req.body?.file);
+        // F-05: new attachments are AES-256-GCM ciphertext that the client
+        // encrypts before upload; the envelope reaches the raw resource bytes.
+        const isEncrypted = req.body?.file?.encryptionVersion === 1;
+        stored = await MediaHandler.send(req.body?.file, null, {
+            encrypted: isEncrypted,
+            requireKeyParticipant: false,
+        });
         const entry = {
             _id: new mongoose.Types.ObjectId(),
             who: req.userDoc._id,
@@ -274,6 +282,7 @@ export const uploadSupportAttachment = async (req, res) => {
             originalFilename: stored.originalFilename,
             mimeType: stored.mimeType,
             size: stored.size || 0,
+            ...(isEncrypted ? mediaEnvelopeOf(stored) : {}),
             createdAt: new Date(),
         };
 

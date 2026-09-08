@@ -4,6 +4,7 @@ import {
     MediaConfigurationError,
     MediaHandler,
     MediaValidationError,
+    mediaEnvelopeOf,
 } from "../utils/mediaHandler.js";
 import { sendNotification } from "../utils/sendNotification.js";
 import { arrayBelowCap, MAX_MEDIA_PER_CONTRACT } from "../utils/quota.js";
@@ -23,7 +24,11 @@ export const sendMedia = async (req, res) => {
     let persisted = false;
 
     try {
-        stored = await MediaHandler.send(req.body?.file);
+        // F-05: new uploads are AES-256-GCM ciphertext. The client always
+        // declares encryptionVersion: 1, which switches MediaHandler to the
+        // encrypted validation path (no magic-byte sniffing, raw resource).
+        const isEncrypted = req.body?.file?.encryptionVersion === 1;
+        stored = await MediaHandler.send(req.body?.file, null, { encrypted: isEncrypted });
 
         const createdAt = new Date();
         const entry = {
@@ -33,6 +38,8 @@ export const sendMedia = async (req, res) => {
             url: stored.url,
             originalFilename: stored.originalFilename,
             mimeType: stored.mimeType,
+            size: stored.size || 0,
+            ...(isEncrypted ? mediaEnvelopeOf(stored) : {}),
             createdAt,
         };
 
@@ -141,9 +148,15 @@ export const getAllMedia = async (req, res) => {
             return res.status(404).json({ error: "Contract not found" });
         }
 
-        const media = [...contract.media].sort(
-            (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
-        );
+        const media = [...contract.media]
+            .sort(
+                (a, b) => new Date(a.createdAt) - new Date(b.createdAt)
+            )
+            .map((item) => ({
+                ...item.toObject ? item.toObject() : item,
+                ...mediaEnvelopeOf(item),
+                size: item.size || 0,
+            }));
         res.json({
             success: true,
             media,

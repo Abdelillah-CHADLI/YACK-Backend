@@ -122,11 +122,11 @@ Also guarded by `auth` + `checkContractPermission`.
 
 | Method | Path | Description | Payload |
 | --- | --- | --- | --- |
-| `POST` | `/send` | Store an uploaded media payload and attach metadata to the contract. | `{ "contractId": "...", "file": { "filename": "proof.png", "buffer": "<base64>", "mimeType": "image/png" } }` |
+| `POST` | `/send` | Store an uploaded media payload and attach metadata to the contract. | `{ "contractId": "...", "file": { "filename": "proof.png", "buffer": "<base64>", "mimeType": "image/png" } }` plus, when the client-side envelope is used, `"encryption":"AES-256-GCM"`, `"encryptionVersion":1`, `"iv"`, `"contentHash"`, `"keyOwner"`, `"keyParticipant"`, `"keyAdmin"` |
 | `GET` | `/all` | Return all media entries for a contract. | Query: `contractId` |
 | `GET` | `/get` | Return one media entry and its usable URL. | Query: `contractId`, `mediaId` |
 
-`POST /media/send` accepts supported image/video/document formats up to 6 MB, uploads them to Cloudinary, and atomically appends the resulting URL and metadata to `contract.media`.
+`POST /media/send` accepts supported image/video/document formats up to 6 MB. In the default legacy flow the server uploads the plaintext payload to Cloudinary and atomically appends the resulting URL and metadata to `contract.media` (`encryptionVersion: 0`). When the client sends an encrypted envelope (`encryptionVersion: 1`), the server validates the AES-256-GCM envelope fields (96-bit `iv`, SHA-256 `contentHash`, and RSA-OAEP-SHA256-wrapped per-reader `keyOwner`/`keyParticipant`/`keyAdmin`), stores the opaque ciphertext on Cloudinary with `resource_type: "raw"`, and records the full envelope on the media entry. The server only ever sees ciphertext for envelope uploads — every reader decrypts client-side.
 
 ---
 ## Support Routes (`/support`)
@@ -138,11 +138,11 @@ Guarded by `auth` + `checkContractPermission` (and `requireActiveAccount` except
 | `GET` | `/thread` | Load the caller's support conversation (messages encrypted for the caller). | Query: `contractId` |
 | `POST` | `/review-access` | Share the encrypted contract details + chat for admin review. | `{ "contractId": "...", "titleForAdmin": "<encrypted>", "descriptionForAdmin": "<encrypted>", "priceForAdmin": "<encrypted>", "messages": [...] }` |
 | `POST` | `/messages` | Append an encrypted support message. | `{ "contractId": "...", "contentForUser": "<encrypted>", "contentForAdmin": "<encrypted>", "contentHash": "<sha256>" }` |
-| `POST` | `/attachments` | Upload a file to the caller's support case. | `{ "contractId": "...", "file": { "filename": "invoice.pdf", "buffer": "<base64>", "mimeType": "application/pdf" } }` |
+| `POST` | `/attachments` | Upload a file to the caller's support case. | `{ "contractId": "...", "file": { "filename": "invoice.pdf", "buffer": "<base64>", "mimeType": "application/pdf" } }` plus the same envelope fields as `/media/send` (`keyParticipant` optional) |
 | `GET` | `/attachments` | List the caller's support case attachments. | Query: `contractId` |
 | `DELETE` | `/attachments/:mediaId` | Remove one of the caller's own attachments. | URL parameter: `mediaId` |
 
-Support attachments accept the same image/video/document formats and size limits as `/media/send`, are stored on the caller's `SupportThread`, and are disclosed to administrators per-thread in `GET /admin/disputes/:contractId`.
+Support attachments accept the same image/video/document formats and size limits as `/media/send`. Legacy uploads are stored as plaintext Cloudinary URLs (`encryptionVersion: 0`); envelope uploads (`encryptionVersion: 1`) are stored as opaquely encrypted `raw` Cloudinary objects with the admin-wrapped key so dispute reviewers can decrypt them in-browser. Both forms are disclosed to administrators per-thread in `GET /admin/disputes/:contractId`.
 
 ---
 ## Notifications
