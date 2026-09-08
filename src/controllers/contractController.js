@@ -598,6 +598,12 @@ export const getTempContractStatus = async (req, res) => {
 
             let finalContractId = temp.finalContract;
             if (!finalContractId && temp.userASign && temp.userBSign && !temp.cancelledAt) {
+                // F-13: a status poll is a legitimate recovery write. The mobile
+                // client polls this endpoint ("UI recovers when push notifications
+                // are delayed or disabled") so a lost /sign response still yields
+                // the final contract. finalizeTempContract is exactly-once
+                // (deterministic _id + duplicate-key retry), expiry-checked and
+                // quota-bounded, so a GET can safely materialize it.
                 const finalContract = await finalizeTempContract(temp._id);
                 finalContractId = finalContract?._id || null;
             }
