@@ -26,10 +26,8 @@ function requiredHash(value) {
     return hash;
 }
 
-function callerRaisedDispute(req) {
-    return req.isUserA
-        ? req.contract.disputedUserA === true
-        : req.contract.disputedUserB === true;
+function callerInDispute(req) {
+    return req.contract.status === "disputed";
 }
 
 function userMessagePayload(message) {
@@ -62,9 +60,9 @@ export const getReviewPublicKey = async (req, res) => {
 };
 
 export const grantReviewAccess = async (req, res) => {
-    if (!callerRaisedDispute(req) || req.contract.status !== "disputed") {
+    if (!callerInDispute(req)) {
         return res.status(403).json({
-            error: "Only a user who raised this dispute can grant review access",
+            error: "Only parties involved in this dispute can access its support case",
             code: "DISPUTE_ACCESS_NOT_ALLOWED",
         });
     }
@@ -141,7 +139,7 @@ export const grantReviewAccess = async (req, res) => {
 };
 
 export const getUserSupportThread = async (req, res) => {
-    if (!callerRaisedDispute(req)) {
+    if (!callerInDispute(req)) {
         return res.status(403).json({ error: "No support case exists for this user" });
     }
 
@@ -168,7 +166,7 @@ export const getUserSupportThread = async (req, res) => {
 };
 
 export const sendUserSupportMessage = async (req, res) => {
-    if (!callerRaisedDispute(req)) {
+    if (!callerInDispute(req)) {
         return res.status(403).json({ error: "No support case exists for this user" });
     }
 

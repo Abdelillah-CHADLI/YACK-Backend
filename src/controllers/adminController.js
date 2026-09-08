@@ -188,12 +188,12 @@ export const getDispute = async (req, res) => {
             return res.status(404).json({ error: "Dispute not found" });
         }
 
-        const disputingUsers = [
-            contract.disputedUserA ? contract.userA?._id : null,
-            contract.disputedUserB ? contract.userB?._id : null,
+        const participants = [
+            contract.userA?._id,
+            contract.userB?._id,
         ].filter(Boolean);
         await Promise.all(
-            disputingUsers.map((userId) => ensureSupportThread(contract._id, userId))
+            participants.map((userId) => ensureSupportThread(contract._id, userId))
         );
 
         const threads = await SupportThread.find({ contract: contract._id })
