@@ -10,6 +10,8 @@ import contractRoutes from "./routes/contractRoutes.js";
 import messageRoutes from "./routes/messageRoutes.js";
 import mediaRoutes from "./routes/mediaRoutes.js";
 import userRoutes from "./routes/userRoutes.js";
+import supportRoutes from "./routes/supportRoutes.js";
+import adminRoutes from "./routes/adminRoutes.js";
 
 
 const app = express();
@@ -29,6 +31,8 @@ app.use("/contracts", contractRoutes);
 app.use("/messages", messageRoutes);
 app.use("/media", mediaRoutes);
 app.use("/user", userRoutes);
+app.use("/support", supportRoutes);
+app.use("/admin", adminRoutes);
 
 // Global error handler
 app.use((err, req, res, next) => {
