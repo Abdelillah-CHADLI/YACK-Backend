@@ -4,6 +4,7 @@ import Contract from "../models/Contract.js";
 import TempContract from "../models/TempContract.js";
 import User from "../models/User.js";
 import { sendNotification } from "../utils/sendNotification.js";
+import { ensureSupportThread } from "./supportController.js";
 
 const DETAILS_HASH_PATTERN = /^[a-f0-9]{64}$/i;
 const MAX_ENCRYPTED_FIELD_LENGTH = 16_384;
@@ -824,7 +825,15 @@ export const disputeContract = async (req, res) => {
                     [agreeField]: false,
                     [reasonField]: reason,
                     [disputedAtField]: new Date(),
-                    status: "disputed"
+                    status: "disputed",
+                    statusBeforeDispute: contract.status === "disputed"
+                        ? (contract.statusBeforeDispute || "active")
+                        : contract.status,
+                    disputeState: "open",
+                    resolutionOutcome: null,
+                    resolutionNote: "",
+                    resolvedAt: null,
+                    resolvedBy: ""
                 }
             },
             { new: true, runValidators: true }
@@ -851,6 +860,9 @@ export const disputeContract = async (req, res) => {
         }
 
         const otherUser = isUserA ? updated.userB : updated.userA;
+        void ensureSupportThread(updated._id, req.userDoc._id).catch((error) => {
+            console.error("[support] Failed to open dispute thread:", error.message);
+        });
         void notifyBestEffort(
             otherUser,
             "contract_disputed",

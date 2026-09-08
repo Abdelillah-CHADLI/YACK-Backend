@@ -17,6 +17,28 @@ const EmbeddedMediaSchema = new mongoose.Schema({
     createdAt: { type: Date, default: Date.now }
 }, { _id: true });
 
+const ReviewAccessMessageSchema = new mongoose.Schema({
+    sourceMessageId: { type: String, default: "" },
+    senderId: { type: String, default: "" },
+    senderName: { type: String, default: "" },
+    contentForAdmin: { type: String, required: true },
+    contentHash: { type: String, default: "" },
+    createdAt: { type: Date, default: Date.now },
+}, { _id: false });
+
+const ReviewAccessGrantSchema = new mongoose.Schema({
+    grantedBy: {
+        type: mongoose.Schema.Types.ObjectId,
+        ref: "User",
+        required: true,
+    },
+    titleForAdmin: { type: String, required: true },
+    descriptionForAdmin: { type: String, required: true },
+    priceForAdmin: { type: String, required: true },
+    messages: [ReviewAccessMessageSchema],
+    grantedAt: { type: Date, default: Date.now },
+}, { _id: true });
+
 const ContractSchema = new mongoose.Schema({
     // Idempotency key for the temporary-contract finalization step. A sparse
     // unique index keeps legacy rows valid while ensuring one final contract
@@ -60,6 +82,26 @@ const ContractSchema = new mongoose.Schema({
     disputeReasonUserB: { type: String, default: "" },
     disputedAtUserA: { type: Date, default: null },
     disputedAtUserB: { type: Date, default: null },
+
+    statusBeforeDispute: {
+        type: String,
+        enum: ["pending", "active", "accepted"],
+        default: null,
+    },
+    disputeState: {
+        type: String,
+        enum: ["none", "open", "resolved"],
+        default: "none",
+    },
+    resolutionOutcome: {
+        type: String,
+        enum: ["resume", "complete", "cancel"],
+        default: null,
+    },
+    resolutionNote: { type: String, default: "" },
+    resolvedAt: { type: Date, default: null },
+    resolvedBy: { type: String, default: "" },
+    reviewAccessGrants: [ReviewAccessGrantSchema],
 
     hash: { type: String, default: "" },
 
