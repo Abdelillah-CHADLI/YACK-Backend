@@ -78,8 +78,12 @@ const ContractSchema = new mongoose.Schema({
     disputedUserA:  { type: Boolean, default: false },
     disputedUserB:  { type: Boolean, default: false },
 
-    disputeReasonUserA: { type: String, default: "" },
+disputeReasonUserA: { type: String, default: "" },
     disputeReasonUserB: { type: String, default: "" },
+    // F-12: new disputes encrypt the reason to the admin review key and no
+    // longer persist the plaintext. Legacy rows carry plaintext above.
+    disputeReasonEncryptedUserA: { type: String, default: "" },
+    disputeReasonEncryptedUserB: { type: String, default: "" },
     disputedAtUserA: { type: Date, default: null },
     disputedAtUserB: { type: Date, default: null },
 

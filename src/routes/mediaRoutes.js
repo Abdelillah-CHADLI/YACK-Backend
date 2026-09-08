@@ -6,14 +6,12 @@ import { mediaUploadLimiter } from "../middleware/rateLimiters.js";
 
 import {
     sendMedia,
-    getAllMedia,
-    getMedia
+    getAllMedia
 } from "../controllers/mediaController.js";
 
 const router = express.Router();
 
 router.post("/send", auth, mediaUploadLimiter, requireActiveAccount, checkContractPermission, sendMedia);
 router.get("/all", auth, requireActiveAccount, checkContractPermission, getAllMedia);
-router.get("/get", auth, requireActiveAccount, checkContractPermission, getMedia);
 
 export default router;

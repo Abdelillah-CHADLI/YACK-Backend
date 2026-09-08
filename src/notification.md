@@ -60,9 +60,11 @@ To receive notifications a `User` document must contain at least one valid `fcmT
 | Key | Type | Description |
 | --- | --- | --- |
 | `type` | `"contractDispute"` | Dispute event identifier. |
-| `reason` | `string` | Optional free-text reason provided when disputing. |
 | `userId` | `string` | `_id` of the user filing the dispute. |
 | `username` | `string` | First name of the disputing user. |
+
+The dispute reason is never placed in the push payload (F-12). In-app disclosures go
+through the encrypted admin review envelope only.
 
 ### contractMessage
 - **Trigger**: User posts a new message through `/messages/send`.

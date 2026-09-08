@@ -851,10 +851,25 @@ export const disputeContract = async (req, res) => {
             return res.status(400).json({ error: "Dispute reason is too large" });
         }
 
+        // F-12: clients may send the reason wrapped in an RSA-OAEP envelope for
+        // the admin review key. When an envelope is present the plaintext reason
+        // is NOT persisted (admin-only confidentiality); legacy clients keep the
+        // plaintext path for backward compatibility.
+        let encryptedReason = "";
+        if (req.body?.encryptedReason != null && req.body.encryptedReason !== "") {
+            encryptedReason = validateCiphertext(
+                req.body.encryptedReason,
+                "Encrypted dispute reason"
+            );
+        }
+
         const isUserA = participantRole(contract, req.userDoc._id) === "userA";
         const disputeField = isUserA ? "disputedUserA" : "disputedUserB";
         const agreeField = isUserA ? "agreedUserA" : "agreedUserB";
         const reasonField = isUserA ? "disputeReasonUserA" : "disputeReasonUserB";
+        const encryptedReasonField = isUserA
+            ? "disputeReasonEncryptedUserA"
+            : "disputeReasonEncryptedUserB";
         const disputedAtField = isUserA ? "disputedAtUserA" : "disputedAtUserB";
 
         const updated = await Contract.findOneAndUpdate(
@@ -867,7 +882,8 @@ export const disputeContract = async (req, res) => {
                 $set: {
                     [disputeField]: true,
                     [agreeField]: false,
-                    [reasonField]: reason,
+                    [reasonField]: encryptedReason ? "" : reason,
+                    [encryptedReasonField]: encryptedReason,
                     [disputedAtField]: new Date(),
                     status: "disputed",
                     statusBeforeDispute: contract.status === "disputed"
@@ -1039,8 +1055,6 @@ export const getContracts = async (req, res) => {
                 agreedUserB: contract.agreedUserB,
                 disputedUserA: contract.disputedUserA,
                 disputedUserB: contract.disputedUserB,
-                disputeReasonUserA: contract.disputeReasonUserA,
-                disputeReasonUserB: contract.disputeReasonUserB,
                 disputedAtUserA: contract.disputedAtUserA,
                 disputedAtUserB: contract.disputedAtUserB,
                 hash: contract.hash,

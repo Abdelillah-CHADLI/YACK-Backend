@@ -57,6 +57,8 @@ function disputeSummary(contract) {
         disputedUserB: contract.disputedUserB,
         disputeReasonUserA: contract.disputeReasonUserA,
         disputeReasonUserB: contract.disputeReasonUserB,
+        disputeReasonEncryptedUserA: contract.disputeReasonEncryptedUserA,
+        disputeReasonEncryptedUserB: contract.disputeReasonEncryptedUserB,
         disputedAtUserA: contract.disputedAtUserA,
         disputedAtUserB: contract.disputedAtUserB,
         reviewAccessGranted: contract.reviewAccessGrants?.length > 0,

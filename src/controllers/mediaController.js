@@ -159,38 +159,3 @@ export const getAllMedia = async (req, res) => {
         res.status(500).json({ error: "Failed to fetch media" });
     }
 };
-
-export const getMedia = async (req, res) => {
-    try {
-        const { mediaId } = req.query;
-        if (!mediaId || !mongoose.Types.ObjectId.isValid(mediaId)) {
-            return res.status(400).json({ error: "Valid mediaId is required" });
-        }
-
-        const mediaEntry = req.contract.media.id(mediaId);
-        if (!mediaEntry) {
-            return res.status(404).json({ error: "Media not found" });
-        }
-
-        // Persisted secure URLs are immediately usable. Only query Cloudinary
-        // for older records that predate URL storage.
-        const mediaData = mediaEntry.url
-            ? { url: mediaEntry.url }
-            : await MediaHandler.get(mediaEntry.content);
-
-        res.json({
-            success: true,
-            media: {
-                _id: mediaEntry._id,
-                who: mediaEntry.who,
-                content: mediaEntry.content,
-                url: mediaData.url,
-                originalFilename: mediaEntry.originalFilename,
-                mimeType: mediaEntry.mimeType,
-                createdAt: mediaEntry.createdAt,
-            },
-        });
-    } catch (error) {
-        mediaErrorResponse(res, error, "Failed to retrieve media");
-    }
-};

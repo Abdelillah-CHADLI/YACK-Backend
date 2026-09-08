@@ -327,18 +327,6 @@ export class MediaHandler {
         throw lastError || new Error("Media not found in storage");
     }
 
-    static getUrl(publicId, options = {}, client = null) {
-        if (typeof publicId !== "string" || !publicId.trim()) {
-            throw new MediaValidationError("Public ID required");
-        }
-        return cloudinaryClient(client).url(publicId.trim(), {
-            fetch_format: "auto",
-            quality: "auto",
-            secure: true,
-            ...options,
-        });
-    }
-
     static async delete(publicId, client = null) {
         if (typeof publicId !== "string" || !publicId.trim()) {
             throw new MediaValidationError("Public ID required");

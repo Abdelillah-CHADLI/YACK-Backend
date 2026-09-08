@@ -30,7 +30,7 @@ All endpoints are served from the Express app in `src/index.js`. Unless stated o
 | `GET` | `/temp/status` | Poll invitation/signature state. | Query: `tempID` | Returns `waiting_for_join`, `waiting_for_signatures`, `finalizing`, `completed`, `cancelled`, or `expired`. Before reservation, any authenticated active account may read safe metadata; afterward it is participant-only. No ciphertext is returned. |
 | `DELETE` | `/temp/:tempID` | Cancel a temporary invitation. | URL parameter: `tempID` | Creator-only and idempotent. Cancellation is retained as a short-lived tombstone until the invitation TTL removes it. |
 | `POST` | `/accept` | Mark a contract as accepted by the caller. | `contractId` (string, required) | Requires membership; completes contract when both accept. |
-| `POST` | `/dispute` | Flag a contract as disputed. | `contractId` (string, required), `reason` (string, optional) | Fails if contract already completed or disputed by caller. |
+| `POST` | `/dispute` | Flag a contract as disputed. | `contractId` (string, required); `encryptedReason` (string, optional, RSA-OAEP envelope for the shared admin review key) or legacy `reason` (string, optional) | Fails if contract already completed or disputed by caller. With `encryptedReason`, the plaintext reason is not stored and is excluded from `/list` responses. |
 | `GET` | `/verify` | Compare stored contract hash with a provided hash. | Query/body `contractId`, `hash` (string, required) | Response indicates `matches`. |
 | `GET` | `/list` | Fetch all contracts involving the caller. | None | Returns only caller's encrypted fields (`title`, `description`, `price`). |
 

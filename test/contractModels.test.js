@@ -41,10 +41,16 @@ test("contract schema persists dispute evidence", () => {
         userA: new mongoose.Types.ObjectId(),
         userB: new mongoose.Types.ObjectId(),
         disputeReasonUserA: "Scope was not delivered",
+        disputeReasonEncryptedUserB: "Q2lwaGVydGV4dEtlcA==",
         disputedAtUserA: new Date()
     });
 
     assert.equal(contract.disputeReasonUserA, "Scope was not delivered");
+    assert.equal(
+        contract.disputeReasonEncryptedUserB,
+        "Q2lwaGVydGV4dEtlcA=="
+    );
+    assert.equal(contract.disputeReasonEncryptedUserA, "");
     assert.ok(contract.disputedAtUserA instanceof Date);
     assert.equal(contract.disputeReasonUserB, "");
     assert.equal(contract.disputedAtUserB, null);
