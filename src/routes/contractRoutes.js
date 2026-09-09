@@ -14,6 +14,7 @@ import {
     disputeContract,
     verifyContract,
     getContracts,
+    getContractById,
     getTempContractStatus,
     cancelTempContract
 } from "../controllers/contractController.js";
@@ -35,6 +36,10 @@ router.post("/accept", auth, userWriteLimiter, requireActiveAccount, checkContra
 router.post("/dispute", auth, disputeLimiter, requireActiveAccount, checkContractPermission, disputeContract);
 router.get("/verify", auth, requireActiveAccount, checkContractPermission, verifyContract);
 router.get("/list", auth, requireActiveAccount, getContracts);
+
+// F-51: single-contract fetch. Registered after the static `/list`, `/verify`
+// and `/temp/status` paths so the `:id` parameter never shadows them.
+router.get("/:id", auth, requireActiveAccount, getContractById);
 
 
 export default router;

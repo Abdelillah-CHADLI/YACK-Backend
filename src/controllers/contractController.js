@@ -1004,6 +1004,62 @@ export const verifyContract = async (req, res) => {
     }
 };
 
+/**
+ * F-14/F-32: item shape shared by the list and single-contract endpoints. Only
+ * the caller's encrypted envelope is returned; the other party's stays server
+ * side. Dispute/reason/timeline fields are plaintext or null, so the mobile
+ * client can keep a compatible local copy (F-32) without leaking anything the
+ * list endpoint did not already expose.
+ */
+function mapContractListItem(contract, userId) {
+    const userAId = contract.userA?._id?.toString();
+    const userBId = contract.userB?._id?.toString();
+    const isUserA = userAId === userId;
+    const otherUser = isUserA ? contract.userB : contract.userA;
+
+    // A deleted/corrupt participant should not make the endpoint fail for an
+    // otherwise healthy contract.
+    if (!otherUser || (userAId !== userId && userBId !== userId)) {
+        return null;
+    }
+
+    return {
+        _id: contract._id,
+        otherUser: {
+            _id: otherUser._id,
+            firstName: otherUser.firstName || "",
+            lastName: otherUser.lastName || "",
+            publicKey: otherUser.publicKey || ""
+        },
+        title: isUserA ? contract.titleUserA : contract.titleUserB,
+        description: isUserA
+            ? contract.descriptionUserA
+            : contract.descriptionUserB,
+        price: isUserA ? contract.priceUserA : contract.priceUserB,
+        detailsHash: contract.detailsHash,
+        status: contract.status,
+        userASign: contract.userASign,
+        userBSign: contract.userBSign,
+        agreedUserA: contract.agreedUserA,
+        agreedUserB: contract.agreedUserB,
+        disputedUserA: contract.disputedUserA,
+        disputedUserB: contract.disputedUserB,
+        disputeReasonUserA: contract.disputeReasonUserA || "",
+        disputeReasonUserB: contract.disputeReasonUserB || "",
+        disputedAtUserA: contract.disputedAtUserA,
+        disputedAtUserB: contract.disputedAtUserB,
+        disputeState: contract.disputeState,
+        resolutionOutcome: contract.resolutionOutcome,
+        resolutionNote: contract.resolutionNote || "",
+        resolvedAt: contract.resolvedAt,
+        resolvedBy: contract.resolvedBy,
+        hash: contract.hash,
+        isUserA,
+        createdAt: contract.createdAt,
+        updatedAt: contract.updatedAt
+    };
+}
+
 /** List caller-visible contracts without leaking the other encrypted envelope. */
 export const getContracts = async (req, res) => {
     logger.info("[contracts] list requested");
@@ -1029,45 +1085,8 @@ export const getContracts = async (req, res) => {
         ]);
 
         const mappedContracts = contracts.flatMap((contract) => {
-            const userAId = contract.userA?._id?.toString();
-            const userBId = contract.userB?._id?.toString();
-            const isUserA = userAId === userId;
-            const otherUser = isUserA ? contract.userB : contract.userA;
-
-            // A deleted/corrupt participant should not make the entire list
-            // endpoint fail for every otherwise healthy contract.
-            if (!otherUser || (userAId !== userId && userBId !== userId)) {
-                return [];
-            }
-
-            return [{
-                _id: contract._id,
-                otherUser: {
-                    _id: otherUser._id,
-                    firstName: otherUser.firstName || "",
-                    lastName: otherUser.lastName || "",
-                    publicKey: otherUser.publicKey || ""
-                },
-                title: isUserA ? contract.titleUserA : contract.titleUserB,
-                description: isUserA
-                    ? contract.descriptionUserA
-                    : contract.descriptionUserB,
-                price: isUserA ? contract.priceUserA : contract.priceUserB,
-                detailsHash: contract.detailsHash,
-                status: contract.status,
-                userASign: contract.userASign,
-                userBSign: contract.userBSign,
-                agreedUserA: contract.agreedUserA,
-                agreedUserB: contract.agreedUserB,
-                disputedUserA: contract.disputedUserA,
-                disputedUserB: contract.disputedUserB,
-                disputedAtUserA: contract.disputedAtUserA,
-                disputedAtUserB: contract.disputedAtUserB,
-                hash: contract.hash,
-                isUserA,
-                createdAt: contract.createdAt,
-                updatedAt: contract.updatedAt
-            }];
+            const item = mapContractListItem(contract, userId);
+            return item ? [item] : [];
         });
 
         return res.json({
@@ -1083,5 +1102,37 @@ export const getContracts = async (req, res) => {
     } catch (error) {
         logger.error("[contracts] Failed to fetch contracts:", { error: error.message });
         return res.status(500).json({ error: "Failed to fetch contracts" });
+    }
+};
+
+/**
+ * F-51: dedicated single-contract fetch for the mobile sync path (push-driven
+ * navigation previously re-ran the full list). Participant-gated exactly like
+ * the list endpoint; non-participants get a 404.
+ */
+export const getContractById = async (req, res) => {
+    try {
+        const userId = req.userDoc._id.toString();
+        const contractId = String(req.params?.id || "");
+        if (!contractId || !mongoose.isValidObjectId(contractId)) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        const contract = await Contract.findOne({
+            _id: contractId,
+            $or: [{ userA: req.userDoc._id }, { userB: req.userDoc._id }]
+        })
+            .populate("userA", "firstName lastName publicKey")
+            .populate("userB", "firstName lastName publicKey");
+
+        if (!contract) {
+            return res.status(404).json({ error: "Contract not found" });
+        }
+
+        const item = mapContractListItem(contract, userId);
+        return res.json({ success: true, contract: item });
+    } catch (error) {
+        logger.error("[contracts] Failed to fetch contract:", { error: error.message });
+        return res.status(500).json({ error: "Failed to fetch contract" });
     }
 };

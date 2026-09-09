@@ -154,6 +154,23 @@ test(
             assert.ok(listA.contracts.some((contract) => contract._id === contractId));
             assert.ok(listB.contracts.some((contract) => contract._id === contractId));
 
+            // F-32/F-51: the item exposes the dispute/reason/timeline fields
+            // the mobile client persists locally, and a dedicated single
+            // contract fetch exists without re-running the full list.
+            const itemA = listA.contracts.find((contract) => contract._id === contractId);
+            assert.equal(itemA.disputeState, "none");
+            assert.equal(itemA.disputeReasonUserA, "");
+            assert.equal(itemA.resolutionOutcome, null);
+            assert.equal(itemA.resolvedAt, null);
+            assert.equal(itemA.disputedAtUserA, null);
+            const singleA = await api("GET", `/contracts/${contractId}`, tokenA);
+            assert.equal(singleA.contract._id, contractId);
+            assert.equal(singleA.contract.disputeState, "none");
+            assert.equal(singleA.contract.hash, itemA.hash);
+            // Non-participants (the admin token is neither userA nor userB) get 404.
+            await api("GET", `/contracts/${contractId}`, adminToken, null, 404);
+            await api("GET", "/contracts/not-an-object-id", tokenA, null, 404);
+
             // F-16: resolving a dispute must be terminal — a concurrent second
             // resolution is rejected and neither party can reopen the case.
             const resolveScen = await api("POST", "/contracts/create", tokenA, {
