@@ -892,9 +892,9 @@ export const disputeContract = async (req, res) => {
                     [encryptedReasonField]: encryptedReason,
                     [disputedAtField]: new Date(),
                     status: "disputed",
-                    statusBeforeDispute: contract.status === "disputed"
-                        ? (contract.statusBeforeDispute || "active")
-                        : contract.status,
+                    statusBeforeDispute: ["pending", "active", "accepted"].includes(contract.status)
+                        ? contract.status
+                        : (contract.statusBeforeDispute || "active"),
                     disputeState: "open",
                     resolutionOutcome: null,
                     resolutionNote: "",

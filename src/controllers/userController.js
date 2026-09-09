@@ -252,7 +252,7 @@ export function createRegisterFcmTokenHandler({ UserModel }) {
                 return res.json({ success: true });
             }
 
-            await UserModel.updateMany(plan.filter, plan.pipeline);
+            await UserModel.updateMany(plan.filter, plan.pipeline, { updatePipeline: true });
 
             return res.json({ success: true });
         } catch (error) {

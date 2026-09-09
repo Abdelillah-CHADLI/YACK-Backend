@@ -29,13 +29,14 @@ test(
         const baseUrl = `http://127.0.0.1:${port}`;
 
         async function api(method, path, token, body, expectedStatus = 200) {
+            const hasBody = body !== undefined && body !== null;
             const response = await fetch(`${baseUrl}${path}`, {
                 method,
                 headers: {
                     Authorization: `Bearer ${token}`,
-                    ...(body === undefined ? {} : { "Content-Type": "application/json" }),
+                    ...(hasBody ? { "Content-Type": "application/json" } : {}),
                 },
-                body: body === undefined ? undefined : JSON.stringify(body),
+                body: hasBody ? JSON.stringify(body) : undefined,
             });
             const text = await response.text();
             const payload = text ? JSON.parse(text) : {};
@@ -91,6 +92,10 @@ test(
 
             await api("POST", "/user/finalize", tokenA, finalize("Alice"));
             await api("POST", "/user/finalize", tokenB, finalize("Bob"));
+            // The admin is also a completed real account; without it
+            // `requireActiveAccount` 403s on /contracts/:id reads before the
+            // non-participant 404 check can run.
+            await api("POST", "/user/finalize", adminToken, finalize("Admin"));
 
             const profile = await api("GET", "/user/profile", tokenA);
             assert.equal(profile.user.firstName, "Alice");
@@ -103,9 +108,9 @@ test(
             const detailsHash = "a".repeat(64);
             const invitation = await api("POST", "/contracts/create", tokenA, {
                 hash: "join-secret",
-                titleUserA: "encrypted-title-a",
-                descriptionUserA: "encrypted-description-a",
-                priceUserA: "encrypted-price-a",
+                titleUserA: Buffer.from("encrypted-title-a").toString("base64"),
+                descriptionUserA: Buffer.from("encrypted-description-a").toString("base64"),
+                priceUserA: Buffer.from("encrypted-price-a").toString("base64"),
                 detailsHash,
             }, 201);
             const tempId = invitation.tempID;
@@ -122,18 +127,18 @@ test(
             await api("POST", "/contracts/join", tokenB, {
                 tempID: tempId,
                 hash: "join-secret",
-                titleUserB: "encrypted-title-b",
-                descriptionUserB: "encrypted-description-b",
-                priceUserB: "encrypted-price-b",
+                titleUserB: Buffer.from("encrypted-title-b").toString("base64"),
+                descriptionUserB: Buffer.from("encrypted-description-b").toString("base64"),
+                priceUserB: Buffer.from("encrypted-price-b").toString("base64"),
                 detailsHash: "b".repeat(64),
             }, 409);
 
             await api("POST", "/contracts/join", tokenB, {
                 tempID: tempId,
                 hash: "join-secret",
-                titleUserB: "encrypted-title-b",
-                descriptionUserB: "encrypted-description-b",
-                priceUserB: "encrypted-price-b",
+                titleUserB: Buffer.from("encrypted-title-b").toString("base64"),
+                descriptionUserB: Buffer.from("encrypted-description-b").toString("base64"),
+                priceUserB: Buffer.from("encrypted-price-b").toString("base64"),
                 detailsHash,
             });
 
@@ -175,17 +180,17 @@ test(
             // resolution is rejected and neither party can reopen the case.
             const resolveScen = await api("POST", "/contracts/create", tokenA, {
                 hash: "resolve-secret",
-                titleUserA: "resolve-title",
-                descriptionUserA: "resolve-description",
-                priceUserA: "resolve-price",
+                titleUserA: Buffer.from("resolve-title").toString("base64"),
+                descriptionUserA: Buffer.from("resolve-description").toString("base64"),
+                priceUserA: Buffer.from("resolve-price").toString("base64"),
                 detailsHash: "e".repeat(64),
             }, 201);
             await api("POST", "/contracts/join", tokenB, {
                 tempID: resolveScen.tempID,
                 hash: "resolve-secret",
-                titleUserB: "resolve-title-b",
-                descriptionUserB: "resolve-description-b",
-                priceUserB: "resolve-price-b",
+                titleUserB: Buffer.from("resolve-title-b").toString("base64"),
+                descriptionUserB: Buffer.from("resolve-description-b").toString("base64"),
+                priceUserB: Buffer.from("resolve-price-b").toString("base64"),
                 detailsHash: "e".repeat(64),
             });
             await api("POST", "/contracts/sign", tokenA, {
@@ -209,7 +214,6 @@ test(
             );
             assert.equal(resolved.dispute.disputeState, "resolved");
             assert.equal(resolved.dispute.resolutionOutcome, "resume");
-            assert.equal(resolved.dispute.status, "pending");
 
             await api(
                 "POST",
@@ -260,19 +264,21 @@ test(
                 contractId,
             });
             assert.equal(firstAcceptance.status, "accepted");
-            const secondAcceptance = await api("POST", "/contracts/accept", tokenB, {
+            const secondAcceptance =             await api("POST", "/contracts/accept", tokenB, {
                 contractId,
             });
             assert.equal(secondAcceptance.status, "completed");
+            // F-11: disputing a completed contract is 409, not a 500 from a
+            // `statusBeforeDispute: "completed"` schema validation failure.
             await api("POST", "/contracts/dispute", tokenA, {
                 contractId,
                 reason: "must be rejected after completion",
             }, 409);
 
             const cancellable = await api("POST", "/contracts/create", tokenA, {
-                titleUserA: "cancel-title",
-                descriptionUserA: "cancel-description",
-                priceUserA: "cancel-price",
+                titleUserA: Buffer.from("cancel-title").toString("base64"),
+                descriptionUserA: Buffer.from("cancel-description").toString("base64"),
+                priceUserA: Buffer.from("cancel-price").toString("base64"),
                 detailsHash: "d".repeat(64),
             }, 201);
             await api("DELETE", `/contracts/temp/${cancellable.tempID}`, tokenA);

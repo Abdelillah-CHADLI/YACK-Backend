@@ -82,14 +82,16 @@ test("registerFcmToken handler: already-bound token is idempotent without a writ
 test("registerFcmToken handler: atomically binds a new token through a single write", async () => {
     let capturedFilter;
     let capturedPipeline;
+    let capturedOptions;
     const handler = createRegisterFcmTokenHandler({
         UserModel: {
             findById() {
                 return { select: async () => ({ _id: "u1", fcmTokens: ["old-token"] }) };
             },
-            async updateMany(filter, pipeline) {
+            async updateMany(filter, pipeline, options) {
                 capturedFilter = filter;
                 capturedPipeline = pipeline;
+                capturedOptions = options;
             },
         },
     });
@@ -98,6 +100,7 @@ test("registerFcmToken handler: atomically binds a new token through a single wr
     assert.equal(res.statusCode, 200);
     assert.deepEqual(capturedFilter, { $or: [{ _id: "u1" }, { fcmTokens: "fcm-token-1234567890abcdef" }] });
     assert.equal(capturedPipeline.length, 1);
+    assert.equal(capturedOptions.updatePipeline, true);
 });
 
 test("registerFcmToken handler: duplicate-key race returns 409 FCM_TOKEN_CONFLICT", async () => {
